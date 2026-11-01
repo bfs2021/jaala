@@ -1,0 +1,3 @@
+fixture: deps
+query: test("auth_fuzz", _), str.find("sayHello_world2", "[A-Za-z][a-z]*[0-9]*", ?i, ?word) => ?i, ?word
+expect: [["0", say], ["1", Hello], ["2", world2]]

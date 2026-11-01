@@ -51,7 +51,7 @@ With neither string bound there is nothing to measure, and the goal is refused:
 
 ## Building text
 
-`str.concat`, `str.replace`, `str.lower`, `str.upper`, `str.capitalize` and `str.split` build text from text, so a name one fact spells can be matched to the name another fact spells differently. Each takes its inputs and then its result, like the arithmetic functions, so a call can sit in a body or in an expression (`?f = str.concat(?p, ".go")`). The inputs need values from the rest of the goal, and with the result given too a call tests it.
+`str.concat`, `str.replace`, `str.lower`, `str.upper`, `str.capitalize`, `str.split` and `str.find` build text from text, so a name one fact spells can be matched to the name another fact spells differently. Each takes its inputs and then its result, like the arithmetic functions, so a call can sit in a body or in an expression (`?f = str.concat(?p, ".go")`). The inputs need values from the rest of the goal, and with the result given too a call tests it.
 
 `str.concat(?head, ?tail, ?text)` puts two strings together:
 
@@ -76,6 +76,14 @@ Like `num.add` it runs from any two of its three values, so given the text and o
 Given an index it gives that part alone, and a negative index counts from the end: -1 is the last part, which is a qualified name's own name, and -2 the one before it. An index past either end gives no row:
 
 {{ demo "demos/reference/builtins-split-last.yaml" }}
+
+`str.find(?s, ?regex, ?i, ?match)` is the same shape for what one fixed separator can't cut. It gives one row per non-overlapping, non-empty match of a regular expression, numbered from 0 and unanchored as in `str.match`, so a camelCase name or a mix of separators reads token by token:
+
+{{ demo "demos/reference/builtins-find.yaml" }}
+
+An index works as it does for `str.split`, and text with no match gives no row, so this reads each test's last word and keeps the ones that say `fuzz`:
+
+{{ demo "demos/reference/builtins-find-last.yaml" }}
 
 None of them makes text up from nothing, so a call with nothing to read is refused:
 

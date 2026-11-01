@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"slices"
 	"strings"
 	"unicode"
 	"unicode/utf8"
@@ -15,7 +16,7 @@ import (
 // Strings registers the string predicates under str: the tests str.contains, str.prefix and
 // str.suffix, the two pattern tests str.glob (see CompileGlob) and str.match (see CompilePattern),
 // str.distance, which binds the edit distance between two strings, and the functions that build
-// text (#284): str.concat, str.replace, str.lower, str.upper, str.capitalize and str.split.
+// text (#284): str.concat, str.replace, str.lower, str.upper, str.capitalize, str.split and str.find.
 func Strings(v *ns.Vocabulary) error {
 	for _, p := range []struct {
 		path string
@@ -38,6 +39,7 @@ func Strings(v *ns.Vocabulary) error {
 		{"str.capitalize", textFn("str.capitalize", []string{"string", "capitalized"},
 			"binds the string with its first character in upper case and the rest as written", capitalize)},
 		{"str.split", strSplit()},
+		{"str.find", strFind()},
 	} {
 		if err := v.AddPredicate(p.path, p.b); err != nil {
 			return err
@@ -246,27 +248,64 @@ func strSplit() ns.Builtin {
 				}
 				return needsBound("str.split", "the string and separator")
 			}
-			parts := strings.Split(in[0], in[1])
-			if args[2].Bound {
-				idx := args[2].Value
-				if idx.Num == nil || *idx.Num != float64(int(*idx.Num)) {
-					return nil
-				}
-				i := int(*idx.Num)
-				if i < 0 {
-					i += len(parts)
-				}
-				if i < 0 || i >= len(parts) {
-					return nil
-				}
-				return emit([]ns.Value{args[0].Value, args[1].Value, idx, ns.S(parts[i])}, nil)
-			}
-			for i, p := range parts {
-				if err := emit([]ns.Value{args[0].Value, args[1].Value, ns.N(float64(i)), ns.S(p)}, nil); err != nil {
-					return err
-				}
-			}
-			return nil
+			return emitNumbered(args, strings.Split(in[0], in[1]), emit)
 		},
 	}
+}
+
+// strFind is str.find(string, regex, index, match): one row per non-overlapping, non-empty match of
+// an unanchored regular expression, numbered from 0, so a name with several separators or a camelCase
+// boundary can be read token by token, which str.split's one fixed separator can't do. Go's
+// FindAllString also returns empty matches; they are dropped before numbering, so an index and a
+// count from the end read only the matches a program could use. An index behaves as in str.split. No
+// match holds for none, and a malformed pattern is an error, as in str.match.
+func strFind() ns.Builtin {
+	return ns.Builtin{
+		Arity:  4,
+		Modes:  [][]bool{{true, true, false, false}},
+		Labels: []string{"string", "regex", "index", "match"},
+		Types:  []ns.ArgType{{Type: ns.TypeString}, {Type: ns.TypeString}, {Type: ns.TypeNumber}, {Type: ns.TypeString}},
+		Doc:    "binds each non-empty match of an unanchored regular expression with its index from 0; given an index, binds that match alone, a negative index counting from the end",
+		Gen: func(_ context.Context, _ ns.Source, args []ns.Arg, emit func([]ns.Value, []string) error) error {
+			in, ok := texts(args[:2])
+			if !ok {
+				if absentIn(args[:2]) {
+					return nil
+				}
+				return needsBound("str.find", "the string and regex")
+			}
+			re, err := CompilePattern(in[1])
+			if err != nil {
+				return err
+			}
+			matches := slices.DeleteFunc(re.FindAllString(in[0], -1), func(m string) bool { return m == "" })
+			return emitNumbered(args, matches, emit)
+		},
+	}
+}
+
+// emitNumbered gives str.split's and str.find's rows from their string, second argument, index and
+// the pieces found: every piece numbered from 0, or with the index bound that piece alone, a negative
+// index counting from the end. An index past either end, or not a whole number, holds for none.
+func emitNumbered(args []ns.Arg, pieces []string, emit func([]ns.Value, []string) error) error {
+	if args[2].Bound {
+		idx := args[2].Value
+		if idx.Num == nil || *idx.Num != float64(int(*idx.Num)) {
+			return nil
+		}
+		i := int(*idx.Num)
+		if i < 0 {
+			i += len(pieces)
+		}
+		if i < 0 || i >= len(pieces) {
+			return nil
+		}
+		return emit([]ns.Value{args[0].Value, args[1].Value, idx, ns.S(pieces[i])}, nil)
+	}
+	for i, p := range pieces {
+		if err := emit([]ns.Value{args[0].Value, args[1].Value, ns.N(float64(i)), ns.S(p)}, nil); err != nil {
+			return err
+		}
+	}
+	return nil
 }

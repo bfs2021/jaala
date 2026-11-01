@@ -166,6 +166,23 @@ func TestTextFunctionsBuildAndCutText(t *testing.T) {
 		{run("str.split", ns.S("a.b.c"), ns.S("."), ns.N(-4), free), ""},
 		{run("str.split", ns.S("a.b.c"), ns.S("."), ns.N(0.5), free), ""},
 		{run("str.split", ns.S("aΩ"), ns.S(""), free, free), "aΩ  0 a | aΩ  1 Ω"},
+		{run("str.find", ns.S("LPC_VCC-3"), ns.S("[A-Za-z0-9]+"), free, free), "LPC_VCC-3 [A-Za-z0-9]+ 0 LPC | LPC_VCC-3 [A-Za-z0-9]+ 1 VCC | LPC_VCC-3 [A-Za-z0-9]+ 2 3"},
+		{run("str.find", ns.S("FerriteBead"), ns.S("[A-Z][a-z]+"), free, free), "FerriteBead [A-Z][a-z]+ 0 Ferrite | FerriteBead [A-Z][a-z]+ 1 Bead"},
+		{run("str.find", ns.S("a.b.c"), ns.S("[a-z]"), ns.N(1), free), "a.b.c [a-z] 1 b"},
+		{run("str.find", ns.S("a.b.c"), ns.S("[a-z]"), ns.N(-1), free), "a.b.c [a-z] -1 c"},
+		{run("str.find", ns.S("a.b.c"), ns.S("[a-z]"), ns.N(-3), free), "a.b.c [a-z] -3 a"},
+		{run("str.find", ns.S("a.b.c"), ns.S("[a-z]"), ns.N(3), free), ""},
+		{run("str.find", ns.S("a.b.c"), ns.S("[a-z]"), ns.N(-4), free), ""},
+		{run("str.find", ns.S("a.b.c"), ns.S("[a-z]"), ns.N(0.5), free), ""},
+		{run("str.find", ns.S("a.b.c"), ns.S("[0-9]"), free, free), ""},
+		{run("str.find", ns.Absent(), ns.S("[a-z]"), free, free), ""},
+		// x* also matches empty around each b: those go before numbering, or index 1 would be empty
+		// and -1 the empty match at the end of the string.
+		{run("str.find", ns.S("axxb"), ns.S("x*"), free, free), "axxb x* 0 xx"},
+		{run("str.find", ns.S("axxbx"), ns.S("x*"), ns.N(1), free), "axxbx x* 1 x"},
+		{run("str.find", ns.S("axxby"), ns.S("x*"), ns.N(-1), free), "axxby x* -1 xx"},
+		{run("str.find", ns.S("abc"), ns.S(""), free, free), ""},
+		{run("str.find", ns.S("axxb"), ns.S("("), free, free), "error: query: invalid regex \"(\": error parsing regexp: missing closing ): `(`"},
 	} {
 		if c.got != c.want {
 			t.Errorf("got %q, want %q", c.got, c.want)
@@ -180,6 +197,8 @@ func TestTextFunctionsBuildAndCutText(t *testing.T) {
 		{"str.replace", []ns.Value{ns.S("a"), free, ns.S("b"), free}},
 		{"str.lower", []ns.Value{free, ns.S("a")}},
 		{"str.split", []ns.Value{ns.S("a"), free, free, free}},
+		{"str.find", []ns.Value{ns.S("a"), free, free, free}},
+		{"str.find", []ns.Value{free, ns.S("a"), free, free}},
 	} {
 		if got := run(c.path, c.args...); !strings.HasPrefix(got, "error: query: "+c.path+" needs ") {
 			t.Errorf("%s%v = %q, want a query: error saying what it needs bound", c.path, c.args, got)
