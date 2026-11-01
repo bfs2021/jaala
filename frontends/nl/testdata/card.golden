@@ -43,6 +43,7 @@ str.capitalize(string: string, capitalized: string) needs string # binds the str
 str.concat(head: string, tail: string, text: string) needs head+tail or head+text or tail+text # text is head followed by tail, run from any two of the three; cutting a head or tail off holds for none when text lacks it
 str.contains(string: string, substring: string) filter # reports whether a string contains a substring
 str.distance(string: string, other: string, distance: number) needs string+other # binds the edit (Levenshtein) distance between two strings, in characters; both strings must be bound
+str.find(string: string, regex: string, index: number, match: string) needs string+regex # binds each non-empty match of an unanchored regular expression with its index from 0; given an index, binds that match alone, a negative index counting from the end
 str.glob(string: string, pattern: string) filter # reports whether the whole string matches a SQLite-style glob (`*` any run, `?` one character, `[a-z]` or `[^a-z]` one of a class, `[[]` a literal `[`)
 str.lower(string: string, lower: string) needs string # binds the string in lower case
 str.match(string: string, regex: string) filter # reports whether the string matches an unanchored regular expression
