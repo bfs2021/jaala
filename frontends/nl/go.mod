@@ -2,6 +2,6 @@ module github.com/panyam/jaala/frontends/nl
 
 go 1.26.4
 
-require github.com/panyam/jaala v0.1.88
+require github.com/panyam/jaala v0.1.89
 
 replace github.com/panyam/jaala => ../../
