@@ -18,7 +18,7 @@ require (
 	github.com/morrisxyang/xreflect v0.0.0-20231001053442-6df0df9858ba // indirect
 	github.com/panyam/gocurrent v0.1.2 // indirect
 	github.com/panyam/goutils v0.1.13 // indirect
-	github.com/panyam/servicekit v0.1.5 // indirect
+	github.com/panyam/servicekit v0.2.2 // indirect
 	github.com/panyam/templar v0.1.0 // indirect
 	github.com/pb33f/ordered-map/v2 v2.3.1 // indirect
 	github.com/radovskyb/watcher v1.0.7 // indirect
@@ -28,12 +28,8 @@ require (
 	github.com/yuin/goldmark-highlighting v0.0.0-20220208100518-594be1970594 // indirect
 	go.abhg.dev/goldmark/anchor v0.2.0 // indirect
 	go.yaml.in/yaml/v4 v4.0.0-rc.6 // indirect
-	golang.org/x/sys v0.48.0 // indirect
-	golang.org/x/text v0.42.0 // indirect
+	golang.org/x/text v0.43.0 // indirect
 	golang.org/x/time v0.16.0 // indirect
-	google.golang.org/genproto/googleapis/rpc v0.0.0-20260917231906-eeb232e0883d // indirect
-	google.golang.org/grpc v1.84.0 // indirect
-	google.golang.org/protobuf v1.36.12 // indirect
 	gopkg.in/yaml.v2 v2.3.0 // indirect
 )
 
@@ -43,7 +39,7 @@ require (
 	github.com/panyam/jaala/frontends/mcp v0.1.89
 	github.com/panyam/jaala/frontends/nl v0.1.89
 	github.com/panyam/jaala/frontends/nlmodels v0.1.89
-	github.com/panyam/mcpkit v0.8.2
+	github.com/panyam/mcpkit v0.8.15
 	gopkg.in/yaml.v3 v3.0.1
 )
 
