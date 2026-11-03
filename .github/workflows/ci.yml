@@ -70,7 +70,7 @@ jobs:
           if [ -n "$extra" ]; then echo "dependencies outside jaala:"; echo "$extra"; exit 1; fi
 
   # The local-model clients are a module of their own (#330), so the root's ./... doesn't reach them.
-  # They may use the network, but nothing outside the standard library and jaala.
+  # They may use the network, and send through chakra's providers, but nothing else outside jaala.
   nlmodels:
     runs-on: ubuntu-latest
     defaults:
@@ -91,10 +91,11 @@ jobs:
         run: go test -race -count=1 ./...
       - name: wasm build
         run: GOOS=js GOARCH=wasm go build ./...
-      - name: standard library and jaala only
+      - name: standard library, jaala and chakra only
         run: |
-          extra=$(go list -deps -f '{{if not .Standard}}{{.ImportPath}}{{end}}' ./... | grep -v '^github.com/panyam/jaala' || true)
-          if [ -n "$extra" ]; then echo "dependencies outside jaala:"; echo "$extra"; exit 1; fi
+          deps() { go list -deps -f '{{if not .Standard}}{{.ImportPath}}{{end}}' "$@" | grep -v '^github.com/panyam/jaala' | sort -u; }
+          extra=$(comm -23 <(deps ./...) <(deps github.com/panyam/chakra))
+          if [ -n "$extra" ]; then echo "dependencies outside jaala and chakra:"; echo "$extra"; exit 1; fi
 
   # The Cypher front end is a module of its own (#352), so no core package can import it and what it
   # comes to depend on reaches only its importers. It stays standard library and jaala only.
