@@ -138,7 +138,7 @@ func TestAThinkingModelThinksBeforeItsProgram(t *testing.T) {
 		t.Fatalf("Ask = %q, %v", p.Text, err)
 	}
 	req := model.reqs[0]
-	if req.Guided != nil || req.MaxTokens != ThinkingMaxTokens || !strings.HasSuffix(req.Instructions, think) || temperature(req) != "0" {
+	if req.Guided != nil || req.MaxTokens != ThinkingMaxTokens || !strings.HasSuffix(req.Instructions, DefaultThinkPrompt) || temperature(req) != "0" {
 		t.Errorf("thinking model asked with grammar %v, %d tokens, temperature %s, instructions ending %q",
 			req.Guided != nil, req.MaxTokens, temperature(req), req.Instructions[max(0, len(req.Instructions)-80):])
 	}
@@ -148,6 +148,22 @@ func TestAThinkingModelThinksBeforeItsProgram(t *testing.T) {
 	}
 	if p, _, err := plain.Ask(context.Background(), "where does a lead?"); err == nil {
 		t.Errorf("control: a model that doesn't think answered %q from the same reply", p.Text)
+	}
+}
+
+// A Role's ThinkPrompt replaces the think line word for word (#485).
+func TestAThinkingModelTakesTheHostsThinkLine(t *testing.T) {
+	v, b := graph(t)
+	model := replying("```\nedge(\"a\", ?x) => ?x\n```")
+	tr, err := New(v, nil, Config{Model: Role{Provider: model, Thinking: true, ThinkPrompt: "\n# H-THINK\n"}, Base: b})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := tr.Ask(context.Background(), "where does a lead?"); err != nil {
+		t.Fatal(err)
+	}
+	if ins := model.reqs[0].Instructions; !strings.HasSuffix(ins, "\n# H-THINK\n") || strings.Contains(ins, DefaultThinkPrompt) {
+		t.Errorf("instructions end %q", ins[max(0, len(ins)-80):])
 	}
 }
 

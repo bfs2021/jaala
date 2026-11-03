@@ -159,7 +159,7 @@ func Extract(ctx context.Context, text string, v *ns.Vocabulary, m Model, o Extr
 			last = err
 			refused[try.Text] = err
 			why := strings.TrimRight(explainLine(err), "\n")
-			turns = append(turns, Turn{RoleModel, try.Text}, Turn{RoleUser, why + "\n\nWrite all the lines again, fixed."})
+			turns = append(turns, Turn{RoleModel, try.Text}, Turn{RoleUser, why + "\n\n" + o.Pack.prompts().ExtractFix})
 		}
 	}
 	return Extraction{}, tr, fmt.Errorf("nl: no facts checked after %d tries: %w", len(tr.Tries), last)
@@ -172,7 +172,7 @@ func extractPrefix(v *ns.Vocabulary, p *Pack) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	prefix := card + extractInstructions
+	prefix := card + p.prompts().Extract
 	if p == nil {
 		return prefix, nil
 	}

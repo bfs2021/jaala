@@ -131,7 +131,7 @@ func act(ctx context.Context, action, arg string, v *ns.Vocabulary, o Options) (
 		for _, c := range cands {
 			seen = append(seen, c.Values...)
 		}
-		if text := strings.TrimSpace(grounded(cands)); text != "" {
+		if text := strings.TrimSpace(grounded(o.Pack.prompts().Grounded, cands)); text != "" {
 			return text, seen
 		}
 		return fmt.Sprintf("nothing found for %q", arg), nil
@@ -309,14 +309,14 @@ var rootRule = regexp.MustCompile(`(?m)^root ::=`)
 
 // actionsPrefix is actionInstructions with a values target written as the model's language writes one,
 // and find's line when there is a Grounder to find with.
-func actionsPrefix(fe FrontEnd, find bool) string {
+func actionsPrefix(fe FrontEnd, find bool, pr Prompts) string {
 	target := "relation.argument"
 	if p, ok := fe.(Prober); ok {
 		target = p.ValuesTarget()
 	}
 	line := ""
 	if find {
-		line = findInstruction
+		line = pr.Find
 	}
-	return fmt.Sprintf(actionInstructions, target, line)
+	return fmt.Sprintf(pr.Actions, target, line)
 }

@@ -84,6 +84,11 @@ func tool[In, A any](t *tools, x Extension[A], host object, name, desc string, h
 		res, err := handle(c, ctx, in)
 		return res, err
 	}
+	for arg, doc := range t.p.ArgDescriptions[name] {
+		if err := own.describe(arg, doc); err != nil {
+			return core.TypedToolResult{}, fmt.Errorf("mcp: the pack's description of %s's %w", name, err)
+		}
+	}
 	def := core.ToolDef{Name: name, Description: desc, InputSchema: own.merge(host)}
 	return core.TypedToolResult{ToolDef: def, Handler: h}, nil
 }
@@ -95,6 +100,27 @@ type object struct {
 	names    []string
 	props    map[string]json.RawMessage
 	required []string
+}
+
+// describe sets the description of o's property name to doc, refusing a property o doesn't have.
+func (o object) describe(name, doc string) error {
+	p, ok := o.props[name]
+	if !ok {
+		return fmt.Errorf("argument %q: it takes no such argument", name)
+	}
+	var m map[string]json.RawMessage
+	if err := json.Unmarshal(p, &m); err != nil {
+		return err
+	}
+	d, err := json.Marshal(doc)
+	if err != nil {
+		return err
+	}
+	m["description"] = d
+	if o.props[name], err = json.Marshal(m); err != nil {
+		return err
+	}
+	return nil
 }
 
 func objectOf(raw json.RawMessage) (object, error) {

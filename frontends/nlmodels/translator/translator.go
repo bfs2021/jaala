@@ -48,6 +48,10 @@ type Role struct {
 	// first token, a line asking it to think the question through and put the program in a fenced
 	// block, and only the last fenced block, outside any <think> section, read as the draft.
 	Thinking bool
+	// ThinkPrompt replaces DefaultThinkPrompt, the line Thinking adds to the prefix, word for word
+	// (#485). Like DefaultThinkPrompt it should ask for the program in a fenced block, which is what
+	// is read as the draft.
+	ThinkPrompt string
 }
 
 // Config is what a host decides per deployment. Everything else is jaala's default.
@@ -131,23 +135,30 @@ func (r Role) build(label string, temp float64) nl.Model {
 		m.MaxTokens = ThinkingMaxTokens
 	}
 	if r.Thinking {
-		return thinking{m}
+		line := r.ThinkPrompt
+		if line == "" {
+			line = DefaultThinkPrompt
+		}
+		return thinking{m, line}
 	}
 	return m
 }
 
-// think is what a thinking model's prefix gains.
-const think = `
+// DefaultThinkPrompt is what a thinking model's prefix gains, unless its Role's ThinkPrompt replaces it.
+const DefaultThinkPrompt = `
 # Before you write the program, think it through: which things the question names and their ids, which relations connect them, which variables join them, and what the answer's columns are. Then write the program alone in a fenced block.
 `
 
 // thinking asks a reasoning model without the grammar and with think, and hands Translate only the
 // program, so each draft is still checked and its error fed back.
-type thinking struct{ nl.Model }
+type thinking struct {
+	nl.Model
+	prompt string // the line the prefix gains: Role.ThinkPrompt or DefaultThinkPrompt
+}
 
 func (t thinking) Complete(ctx context.Context, p nl.Prompt) (nl.Completion, error) {
 	p.Grammar = ""
-	p.Prefix += think
+	p.Prefix += t.prompt
 	c, err := t.Model.Complete(ctx, p)
 	c.Text = programIn(c.Text)
 	return c, err

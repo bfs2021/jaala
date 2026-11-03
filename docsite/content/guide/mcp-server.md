@@ -51,7 +51,9 @@ Agents know Cypher far better than jaala's Datalog. A pack whose `Cypher` field 
 
 ## Instructions
 
-The instructions an agent reads when it connects open with the pack's `About`, say how to write a program and to call `schema` first, show the pack's first two examples, point at `look`, `values` (and `find`, with a Grounder) and `query`'s `sample` before guessing a value, and, with a graph, say Cypher works and name its labels and types, as the first example above prints; `mcp.Instructions` returns them. `Pack.Instructions` replaces them word for word, for a host trying wordings against its own agent ([declaire#308](https://github.com/panyam/declaire/issues/308)). `mcp.AgentLine` is a sentence for the host's agent instructions, such as a CLAUDE.md, saying when to use the server.
+The instructions an agent reads when it connects open with the pack's `About`, say how to write a program and to call `schema` first, show the pack's first two examples, point at `look`, `values` (and `find`, with a Grounder) and `query`'s `sample` before guessing a value, and, with a graph, say Cypher works and name its labels and types, as the first example above prints; `mcp.Instructions` returns them. `Pack.Instructions` replaces them word for word, for a host trying wordings against its own agent ([declaire#308](https://github.com/panyam/declaire/issues/308)). `mcp.AgentLine` is a sentence for the host's agent instructions, such as a CLAUDE.md, saying when to use the server, and `Pack.AgentLine` replaces it.
+
+The tools' descriptions are jaala's too, written from `About`, and a host replaces any of them by tool name in `Pack.ToolDescriptions`, and a tool's argument docs in `Pack.ArgDescriptions` ([#485](https://github.com/panyam/jaala/issues/485)). `mcp.ToolDescriptions(p)` gives jaala's as they'd be written for the pack, to start from. A name that isn't one of the server's tools, or an argument a tool doesn't take, fails `New`, so a typo doesn't quietly leave jaala's text in place. The `ask` tool's prompts follow the pack's `Prompts`, as `Translate`'s do.
 
 ## A host's own tools and arguments
 

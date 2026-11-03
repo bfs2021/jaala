@@ -225,6 +225,10 @@ func translate(ctx context.Context, question string, v *ns.Vocabulary, g Grounde
 		g = o.Pack.Grounder
 	}
 	o.grounder = g
+	pr := o.Pack.prompts()
+	if err := pr.checkTemplates(); err != nil {
+		return Program{}, tr, err
+	}
 	prefix, err := promptPrefix(v, o)
 	if err != nil {
 		return Program{}, tr, err
@@ -236,7 +240,7 @@ func translate(ctx context.Context, question string, v *ns.Vocabulary, g Grounde
 		if cands, err = g.Ground(ctx, question); err != nil {
 			return Program{}, tr, fmt.Errorf("nl: grounding the question: %w", err)
 		}
-		ask += grounded(cands)
+		ask += grounded(pr.Grounded, cands)
 	}
 	tries := o.MaxTries
 	if tries <= 0 {
@@ -287,13 +291,13 @@ func translate(ctx context.Context, question string, v *ns.Vocabulary, g Grounde
 			held = &p
 		}
 	}
-	mem := &memory{} // what the actions have shown, across models, since it is about the data
+	mem := &memory{found: pr.CompactFound, refused: pr.CompactRefused} // what the actions have shown, across models, since it is about the data
 	compact := o.Actions != nil && o.Actions.Compact
 	for k, model := range models {
 		mem.facts, mem.last = nil, "" // a fallback starts a fresh conversation
 		turns := []Turn{{RoleUser, ask}}
 		if k > 0 && errors.Is(last, errEmpty) {
-			turns[0].Text += "\n\nA program written for this answered nothing; the question may need other members or values."
+			turns[0].Text += "\n\n" + pr.EmptyFallback
 		}
 		lastModel := k == len(models)-1
 		refused := map[string]error{}
@@ -321,12 +325,12 @@ func translate(ctx context.Context, question string, v *ns.Vocabulary, g Grounde
 			if errors.Is(err, errAction) {
 				result := try.result
 				if asked[try.Text] {
-					result = "You asked that already. " + result
+					result = pr.AskedAgain + " " + result
 				}
 				asked[try.Text] = true
 				steps++
 				if steps == o.Actions.steps() {
-					result += "\n\nThat was the last look: reply with your answer."
+					result += "\n\n" + pr.LastLook
 				}
 				tr.Steps = append(tr.Steps, Step{Model: try.Model, Action: try.action, Text: try.Text, Result: result, After: len(tr.Tries),
 					TokensIn: try.TokensIn, TokensOut: try.TokensOut, TokensCached: try.TokensCached, Latency: try.Latency})
@@ -378,7 +382,7 @@ func translate(ctx context.Context, question string, v *ns.Vocabulary, g Grounde
 				// is told again, more pointedly, rather than losing its remaining tries (#483)
 				reasked = true
 				tr.Tries[len(tr.Tries)-1].Reasked = true
-				msg := reask(what, why[try.Text], err, o.FrontEnd != nil, cands)
+				msg := reask(pr, what, why[try.Text], err, o.FrontEnd != nil, cands)
 				mem.facts = append(mem.facts, fact(try.Text, "repeated, and answered nothing again"))
 				mem.last = try.Text + "\n" + msg
 				turns = append(turns, Turn{RoleModel, try.Text}, Turn{RoleUser, msg})
@@ -388,9 +392,9 @@ func translate(ctx context.Context, question string, v *ns.Vocabulary, g Grounde
 				break
 			}
 			refused[try.Text] = err
-			fix := "Write the whole " + what + " again, fixed."
+			fix := fmt.Sprintf(pr.Fix, what)
 			if try.Kind == KindEmpty {
-				fix = "Write the whole " + what + " again, with other members or values."
+				fix = fmt.Sprintf(pr.FixEmpty, what)
 			}
 			told := strings.TrimRight(try.explain(err), "\n")
 			why[try.Text] = told
@@ -408,10 +412,7 @@ func translate(ctx context.Context, question string, v *ns.Vocabulary, g Grounde
 // reask is what a model is told when it resends a draft that answered nothing (#483): that it did, what
 // it was told the first time (told, in the draft's language), the call to change when the empty report
 // names one in jaala's terms, and the grounded values again, since by now they are far back.
-func reask(what, told string, err error, frontEnd bool, cands []Candidate) string {
-	var b strings.Builder
-	fmt.Fprintf(&b, "That is the same %s you sent before, and it answers nothing for the same reason:\n\n%s", what, told)
-	b.WriteString(grounded(cands))
+func reask(pr Prompts, what, told string, err error, frontEnd bool, cands []Candidate) string {
 	change := "the part the report above names"
 	var empty *EmptyAnswer
 	if errors.As(err, &empty) && empty.Why != nil && !frontEnd {
@@ -421,8 +422,7 @@ func reask(what, told string, err error, frontEnd bool, cands []Candidate) strin
 		}
 		change = "`" + call + "`, which matched nothing,"
 	}
-	fmt.Fprintf(&b, "\n\nDon't send it again. Change %s to other members or values, and write the whole %s again.", change, what)
-	return b.String()
+	return fmt.Sprintf(pr.Reask, what, told, grounded(pr.Grounded, cands), change)
 }
 
 // errLowAgreement is an answer whose vote agreed less than Options.Escalate asks.
@@ -438,9 +438,9 @@ func promptPrefix(v *ns.Vocabulary, o Options) (string, error) {
 		if err != nil {
 			return "", err
 		}
-		prefix := card + instructions
+		prefix := card + o.Pack.prompts().Instructions
 		if o.Actions != nil {
-			prefix += actionsPrefix(nil, o.grounder != nil)
+			prefix += actionsPrefix(nil, o.grounder != nil, o.Pack.prompts())
 		}
 		if o.Pack != nil {
 			if err := o.Pack.Validate(v); err != nil {
@@ -464,9 +464,13 @@ func promptPrefix(v *ns.Vocabulary, o Options) (string, error) {
 			return "", fmt.Errorf("nl: the front end's example %d (%q): %w", i+1, e.Question, err)
 		}
 	}
-	prefix := card + fe.Instructions()
+	instr := fe.Instructions()
+	if s, ok := o.Pack.prompts().FrontEndInstructions[fe.Language()]; ok {
+		instr = s
+	}
+	prefix := card + instr
 	if o.Actions != nil {
-		prefix += actionsPrefix(fe, o.grounder != nil)
+		prefix += actionsPrefix(fe, o.grounder != nil, o.Pack.prompts())
 	}
 	if o.Pack != nil {
 		p := *o.Pack
@@ -618,13 +622,14 @@ func kindOf(err error, otherwise string) string {
 	return otherwise
 }
 
-// grounded lists the candidates after the question, for the model to use their values as written.
-func grounded(cands []Candidate) string {
+// grounded lists the candidates after the question under head (Prompts.Grounded), for the model to use
+// their values as written.
+func grounded(head string, cands []Candidate) string {
 	if len(cands) == 0 {
 		return ""
 	}
 	var b strings.Builder
-	b.WriteString("\n\nValues the question's names may stand for, likeliest first (use them exactly as written):")
+	b.WriteString("\n\n" + head)
 	for _, c := range cands {
 		quoted := make([]string, len(c.Values))
 		for i, v := range c.Values {

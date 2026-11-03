@@ -116,7 +116,7 @@ t, err := translator.New(v, pack, translator.Config{
 p, tr, err := t.Ask(ctx, "which tests reach the billing package?")
 ```
 
-jaala picks what each role is sent. The model gets temperature 0 and the fallback 0.7, since the fallback is only asked once the model has failed. Both reply in at most 512 tokens. A role marked `Thinking` is a reasoning model, so it gets 3072 tokens and no grammar, which would hold the reply to a program from its first token, plus a line asking it to think the question through and put the program in a fenced block. Only the last fenced block outside `<think>` counts as its draft. A `Role` can replace any of these, `Config.Options` edits the `nl.Options` last for anything `Config` doesn't name, and `Model()` and `Fallback()` hand the tuned models to [jaala's MCP server](#serving-agents) for its `ask` tool.
+jaala picks what each role is sent. The model gets temperature 0 and the fallback 0.7, since the fallback is only asked once the model has failed. Both reply in at most 512 tokens. A role marked `Thinking` is a reasoning model, so it gets 3072 tokens and no grammar, which would hold the reply to a program from its first token, plus a line asking it to think the question through and put the program in a fenced block. Only the last fenced block outside `<think>` counts as its draft. A `Role` can replace any of these, its `ThinkPrompt` the think line (`translator.DefaultThinkPrompt`), `Config.Options` edits the `nl.Options` last for anything `Config` doesn't name, and `Model()` and `Fallback()` hand the tuned models to [jaala's MCP server](#serving-agents) for its `ask` tool.
 
 ## Domain packs
 
@@ -135,6 +135,10 @@ The pack's part goes after the card and the instructions, `About` and the exampl
 ```go
 {{ includeFileText "examples/guide/pack_test.go" }}
 ```
+
+### The words around the pack's
+
+Everything jaala writes into a prompt around the pack's own text is the pack's to replace too ([#485](https://github.com/panyam/jaala/issues/485)), so a host tunes its prompts against its own models without a jaala change. `Pack.Prompts` holds the instructions after the card, a front end's instructions by language, the action loop's text, the lines a refused draft and an empty answer go back with, the fallback's note, the reask after a repeated empty draft, the heading over the grounded values, the pick's instructions and its retry line, the compact turn's headings, and `Extract`'s instructions and retry line. A field left empty keeps jaala's, so a host sets only what it changes, and `nl.DefaultPrompts()` gives jaala's text to start from. A few are templates (the action loop's, the fix lines and the reask), and a replacement keeps every placeholder, in any order with explicit indexes such as `%[2]s`; `Pack.Validate`, and `Translate` before it asks a model, refuse one that drops or adds any. A field holds its own sentences: the blank lines between it and the rest of a turn stay jaala's.
 
 ### Answering with one call
 
