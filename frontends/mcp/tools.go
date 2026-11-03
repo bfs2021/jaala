@@ -484,8 +484,12 @@ func (c *call) ask(ctx core.ToolContext, in askInput) (core.ToolResult, error) {
 		return core.ErrorResult(err.Error() + c.budgetHint(err)), nil
 	}
 	p, tr, err := nl.Translate(ctx, in.Question, c.v, nil, model, nl.Options{
-		Fallback: fallback, Base: b, Eval: c.evalOptions(in.MaxWork), Pack: &c.p.Pack, FrontEnd: fe,
+		Fallback: fallback, Base: b, Eval: c.evalOptions(in.MaxWork), Pack: &c.p.Pack, FrontEnd: fe, Abstain: c.o.Abstain,
 	})
+	var ab *nl.Abstained
+	if errors.As(err, &ab) {
+		return core.TextResult(abstainedText(ab) + traceText(tr)), nil
+	}
 	if err != nil {
 		return core.ErrorResult(fmt.Sprintf("no program answered it: %v\n%s", err, traceText(tr))), nil
 	}
@@ -507,6 +511,20 @@ func (c *call) ask(ctx core.ToolContext, in askInput) (core.ToolResult, error) {
 		return res, err
 	}
 	return core.TextResult(fmt.Sprintf("%s:\n  %s\n%s%s", head, p.Text, res.Content[0].Text, traceText(tr))), nil
+}
+
+// abstainedText says ask has no answer it's confident of: why, and the closest draft with what was
+// wrong with it, which a caller may finish themselves.
+func abstainedText(a *nl.Abstained) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "not confident (%s): no answer.\n", a.Reason)
+	if a.Draft.Text == "" {
+		fmt.Fprintf(&b, "no draft to offer: %s\n", a.Diagnosis)
+		return b.String()
+	}
+	fmt.Fprintf(&b, "closest draft, from %s:\n  %s\n", a.Draft.Model, a.Draft.Text)
+	fmt.Fprintf(&b, "why it wasn't taken:\n  %s\n", strings.ReplaceAll(strings.TrimRight(a.Diagnosis, "\n"), "\n", "\n  "))
+	return b.String()
 }
 
 // traceText is a line per try: the model, why it was refused, and its tokens.
