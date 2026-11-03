@@ -125,8 +125,8 @@ func (v *Vocabulary) AddRelation(path string, s Schema) error {
 
 // AddPredicate registers a computed predicate at path: a filter (Holds set) or a generator (Gen
 // set), exactly one. It fails on a builtin that is neither or both, on a filter with arity below
-// one, on a generator without Modes or with a mode of the wrong length, and on a path the tree's
-// rules refuse (see Vocabulary).
+// one, on a generator without Modes or with a mode of the wrong length, on Aliased set for a filter,
+// of the wrong length or required by a mode, and on a path the tree's rules refuse (see Vocabulary).
 func (v *Vocabulary) AddPredicate(path string, b Builtin) error {
 	if (b.Holds == nil) == (b.Gen == nil) {
 		return fmt.Errorf("query: predicate %q needs exactly one of Holds and Gen", path)
@@ -144,6 +144,18 @@ func (v *Vocabulary) AddPredicate(path string, b Builtin) error {
 				return fmt.Errorf("query: generator %q has a mode of %d positions, want %d", path, len(m), width)
 			}
 		}
+		if b.Aliased != nil && len(b.Aliased) != width {
+			return fmt.Errorf("query: generator %q marks %d positions Aliased, want %d", path, len(b.Aliased), width)
+		}
+		for i, aliased := range b.Aliased {
+			for _, m := range b.Modes {
+				if aliased && m[i] {
+					return fmt.Errorf("query: generator %q has a mode requiring argument %d, which is Aliased: a value bound while the query runs is never passed there", path, i+1)
+				}
+			}
+		}
+	} else if b.Aliased != nil {
+		return fmt.Errorf("query: filter %q marks arguments Aliased; only a generator's can be", path)
 	}
 	return v.add(path, member{kind: kindPredicate, pred: b})
 }

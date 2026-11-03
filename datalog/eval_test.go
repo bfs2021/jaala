@@ -255,6 +255,44 @@ func TestTextFunctionsBuildNamesInEveryEvaluator(t *testing.T) {
 	}
 }
 
+// dotted is one dotted name and two indices, one counting from the end, as a host's data might hold.
+func dotted() *ns.MemSource {
+	src := ns.NewMemSource().Declare("net", "name").
+		DeclareSchema("idx", ns.Schema{Arity: 1, Labels: []string{"i"}, Types: []ns.ArgType{{Type: ns.TypeNumber}}})
+	src.Add("net", ns.Tuple{Vals: []ns.Value{ns.S("a.b.c")}})
+	src.Add("idx", ns.Tuple{Vals: []ns.Value{ns.N(-1)}})
+	src.Add("idx", ns.Tuple{Vals: []ns.Value{ns.N(1)}})
+	return src
+}
+
+// A negative index counts from the end only where the call writes it (#480). Reached any other way,
+// through a rule head the demand rewrite passes it down, or joined from data in either order, it
+// matches only the indices the generator lists, 0 up, so every evaluator and every order agree.
+// control: a non-negative index reaches the call every way, and a written or host-bound -1 is the
+// last part.
+func TestANegativeIndexCountsFromTheEndOnlyWhereItIsWritten(t *testing.T) {
+	for _, fn := range []string{`str.split(?n, ".", %s, ?p)`, `str.find(?n, "[a-z]+", %s, ?p)`} {
+		call := func(i string) string { return fmt.Sprintf(fn, i) }
+		for _, c := range []struct{ q, want string }{
+			{`part(?n, ?i, ?p) :- net(?n), ` + call("?i") + `; part(?n, -1, ?p) => ?p`, ""},
+			{`part(?n, ?i, ?p) :- net(?n), ` + call("?i") + `; part(?n, 1, ?p) => ?p`, "b"},
+			{`idx(?i), net(?n), ` + call("?i") + ` => ?p`, "b"},
+			{`net(?n), ` + call("?i") + `, idx(?i) => ?p`, "b"},
+			{`net(?n), ` + call("-1") + ` => ?p`, "c"},
+			{`part(?n, ?p) :- net(?n), ` + call("-1") + `; part(?n, ?p) => ?p`, "c"},
+		} {
+			if got := col(eval(t, dotted(), c.q), "p"); got != c.want {
+				t.Errorf("%s: p = %q, want %q", c.q, got, c.want)
+			}
+		}
+		bound := mustParse(t, `net(?n), `+call("?i")+` => ?p`)
+		rows, err := both(bound, baseFor(std(dotted())), Bind(map[Var][]ns.Value{"i": {ns.N(-1)}}))
+		if err != nil || col(rows, "p") != "c" {
+			t.Errorf("%s with ?i bound to -1: %v, %v, want the last part", bound.Goal, rows, err)
+		}
+	}
+}
+
 // succ is a host generator over the Source it is handed: succ(?a, ?b) enumerates edges out of ?a
 // (or out of every node when ?a is unbound). It exercises the path a host's own graph walk takes.
 func succRegistry() *ns.Vocabulary {

@@ -229,17 +229,19 @@ func strConcat() ns.Builtin {
 }
 
 // strSplit is str.split(string, separator, index, part): one row per part, numbered from 0. With
-// index bound it gives that part alone, and a negative index counts from the end, so -1 is the last
-// part (a hierarchical name's leaf) and -2 the one before it. An index past either end, or not a
+// index written as a constant it gives that part alone, and a negative index counts from the end, so -1
+// is the last part (a hierarchical name's leaf) and -2 the one before it. The index is Aliased: one
+// bound while the query runs only matches the parts' indices from 0 (#480). An index past either end, or not a
 // whole number, holds for none. The parts are Go's strings.Split: an empty separator splits between
 // characters, and a string without the separator is one part, itself.
 func strSplit() ns.Builtin {
 	return ns.Builtin{
-		Arity:  4,
-		Modes:  [][]bool{{true, true, false, false}},
-		Labels: []string{"string", "separator", "index", "part"},
-		Types:  []ns.ArgType{{Type: ns.TypeString}, {Type: ns.TypeString}, {Type: ns.TypeNumber}, {Type: ns.TypeString}},
-		Doc:    "binds each part of the string between separators with its index from 0; given an index, binds that part alone, a negative index counting from the end (-1 is the last part)",
+		Arity:   4,
+		Modes:   [][]bool{{true, true, false, false}},
+		Aliased: []bool{false, false, true, false}, // -1 is the last part, listed by its index from 0
+		Labels:  []string{"string", "separator", "index", "part"},
+		Types:   []ns.ArgType{{Type: ns.TypeString}, {Type: ns.TypeString}, {Type: ns.TypeNumber}, {Type: ns.TypeString}},
+		Doc:     "binds each part of the string between separators with its index from 0; given an index, binds that part alone, a negative index counting from the end (-1 is the last part)",
 		Gen: func(_ context.Context, _ ns.Source, args []ns.Arg, emit func([]ns.Value, []string) error) error {
 			in, ok := texts(args[:2])
 			if !ok {
@@ -261,11 +263,12 @@ func strSplit() ns.Builtin {
 // match holds for none, and a malformed pattern is an error, as in str.match.
 func strFind() ns.Builtin {
 	return ns.Builtin{
-		Arity:  4,
-		Modes:  [][]bool{{true, true, false, false}},
-		Labels: []string{"string", "regex", "index", "match"},
-		Types:  []ns.ArgType{{Type: ns.TypeString}, {Type: ns.TypeString}, {Type: ns.TypeNumber}, {Type: ns.TypeString}},
-		Doc:    "binds each non-empty match of an unanchored regular expression with its index from 0; given an index, binds that match alone, a negative index counting from the end",
+		Arity:   4,
+		Modes:   [][]bool{{true, true, false, false}},
+		Aliased: []bool{false, false, true, false},
+		Labels:  []string{"string", "regex", "index", "match"},
+		Types:   []ns.ArgType{{Type: ns.TypeString}, {Type: ns.TypeString}, {Type: ns.TypeNumber}, {Type: ns.TypeString}},
+		Doc:     "binds each non-empty match of an unanchored regular expression with its index from 0; given an index, binds that match alone, a negative index counting from the end",
 		Gen: func(_ context.Context, _ ns.Source, args []ns.Arg, emit func([]ns.Value, []string) error) error {
 			in, ok := texts(args[:2])
 			if !ok {

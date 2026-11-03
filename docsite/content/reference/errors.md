@@ -855,6 +855,18 @@ A generator lists the patterns of bound arguments it accepts.
 
 A generator's mode has one entry per argument.
 
+`query: generator … marks … positions Aliased, want …`
+
+`Aliased`, like a mode, has one entry per argument.
+
+`query: generator … has a mode requiring argument …, which is Aliased: a value bound while the query runs is never passed there`
+
+An aliased argument is passed only a constant the call writes, so no mode can need it bound.
+
+`query: filter … marks arguments Aliased; only a generator's can be`
+
+A filter is always called with every argument bound, so it has nothing to alias.
+
 `query: … is defined twice, as a … and as a …`
 
 Two registrations claim one path.

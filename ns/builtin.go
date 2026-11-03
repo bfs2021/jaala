@@ -57,6 +57,14 @@ type Builtin struct {
 	// error when the query stops (cancelled, or over its work budget, which counts every emitted
 	// solution), and Gen should return it as is.
 	Gen func(ctx context.Context, src Source, args []Arg, emit func(vals []Value, cites []string) error) error
+	// Aliased marks a generator's arguments where a bound value can name a row its enumeration lists
+	// under another value, such as str.split's index, where -1 names the last part and enumerating
+	// lists it by its index from 0. The engine passes such an argument to Gen bound only when the call
+	// writes a constant there (a host's Bind of the goal's variable writes one). A value bound while
+	// the query runs, by a join or by a rewrite passing a caller's constant down, is matched against
+	// the rows Gen lists instead, so the answer doesn't depend on the order or the rewrite that reached
+	// the call (#480). nil marks none. No mode may require an aliased argument.
+	Aliased []bool
 	// Volatile marks a generator or filter whose answers can change while its Source's facts don't,
 	// such as one reading the clock, the network, or a host index updated in place. A Base keeps the
 	// derived relations a query evaluated in full and reuses them in later queries, which assumes every
