@@ -168,12 +168,12 @@ GOARCH=wasm go test ./ns` (#417 ran `ns` that way).
   any chakra `Provider` (#487), and jaala keeps no model client of its own. llama.cpp and Ollama are
   chakra's presets (`agent.NewLlamaCppProvider`, `agent.NewOllamaProvider`, chakra#180, v0.2.2); the
   Model sends the grammar and a vote's seed only when `agent.CapabilitiesOf` says the provider can
-  (llama.cpp both, Ollama a seed, Anthropic neither). `New` sends `Temperature` 0, since chakra omits
+  (llama.cpp both, Ollama a seed, Anthropic neither) and a temperature only where it says `Temperature`. `New` sends `Temperature` 0, since chakra omits
   a nil one and llama-server then samples at 0.8; a host on Anthropic sets it nil. Its `translator`
   package (#490) is the entry point a host calls (`translator.New(v, pack, cfg)`, `Ask`): jaala owns
   each role's tuning (temperature 0 and a fallback's 0.7, 512 tokens, a `Thinking` model's 3072, no
-  grammar, a think line and its last fenced block), a `Role` overrides it, and `NoTemperature` stands in
-  until chakra can say a provider refuses one (chakra#191). jaala's agent loop
+  grammar, a think line and its last fenced block), a `Role` overrides it, and a temperature goes only to a provider whose
+  `CapabilitiesOf` says it takes one (chakra#191, v0.2.4). jaala's agent loop
   moves onto chakra from here, jaala as a helper a chakra agent plugs in, never a wrapper over it.
   CI's `nlmodels` job tests it; the root's `./...` doesn't reach it. Like every
   sub-module it requires jaala and `frontends/nl` at the last release and replaces both with the
