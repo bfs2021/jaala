@@ -6,7 +6,7 @@ import (
 )
 
 // A FrontEnd is a language a model writes in place of jaala's own (#354): Cypher (frontends/cypher's
-// FrontEnd) and later others. Translate with Options.FrontEnd prompts with the front end's card,
+// FrontEnd) and later others. The translator with Options.FrontEnd prompts with the front end's card,
 // instructions and examples, compiles each draft into a program and checks and runs that as it would
 // one the model wrote in jaala, and sends every refusal back in the front end's terms, so a host can
 // measure which language its model writes better over the same questions. It is an interface here,
@@ -18,7 +18,7 @@ type FrontEnd interface {
 	Card(v *ns.Vocabulary) (string, error)
 	// Instructions say how to write one draft, after the card.
 	Instructions() string
-	// Examples are questions with drafts answering them, in the language, which Translate shows the
+	// Examples are questions with drafts answering them, in the language, which the translator shows the
 	// model in place of the pack's (jaala) examples and compiles and checks before asking it.
 	Examples() []Example
 	// Grammar is a GBNF grammar a decoder can hold the model to, sent as Prompt.Grammar; "" for none.

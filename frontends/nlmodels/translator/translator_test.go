@@ -92,8 +92,8 @@ func TestAskTunesEachRole(t *testing.T) {
 	if temperature(fb) != "0.7" || fb.MaxTokens != MaxTokens {
 		t.Errorf("fallback asked at temperature %s, %d tokens", temperature(fb), fb.MaxTokens)
 	}
-	if trace.Tries[0].Model != "model" || tr.Model().Name() != "model" || tr.Fallback().Name() != "fallback" {
-		t.Errorf("names %q %q %q", trace.Tries[0].Model, tr.Model().Name(), tr.Fallback().Name())
+	if trace.Tries[0].Model != "model" || trace.Tries[len(trace.Tries)-1].Model != "fallback" || !tr.HasFallback() {
+		t.Errorf("names %q %q", trace.Tries[0].Model, trace.Tries[len(trace.Tries)-1].Model)
 	}
 }
 
@@ -112,18 +112,19 @@ func TestARoleOverridesTheDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := tr.Ask(context.Background(), "q"); err != nil {
+	p, trace, err := tr.Ask(context.Background(), "q")
+	if err != nil {
 		t.Fatal(err)
 	}
-	if req := model.reqs[0]; temperature(req) != "0.3" || req.MaxTokens != 99 || tr.Model().Name() != "qwen" {
-		t.Errorf("model: temperature %s, %d tokens, %q", temperature(req), req.MaxTokens, tr.Model().Name())
+	if req := model.reqs[0]; temperature(req) != "0.3" || req.MaxTokens != 99 || trace.Tries[0].Model != "qwen" {
+		t.Errorf("model: temperature %s, %d tokens, %q", temperature(req), req.MaxTokens, trace.Tries[0].Model)
 	}
-	if req := fallback.reqs[0]; req.Temperature != nil || tr.Fallback().Name() != "claude" {
-		t.Errorf("fallback: temperature %s, %q", temperature(req), tr.Fallback().Name())
+	if req := fallback.reqs[0]; req.Temperature != nil || p.Model != "claude" {
+		t.Errorf("fallback: temperature %s, %q", temperature(req), p.Model)
 	}
 	alone, err := New(v, nil, Config{Model: Role{Provider: replying()}})
-	if err != nil || alone.Fallback() != nil {
-		t.Errorf("control: no fallback named gave %v, %v", alone.Fallback(), err)
+	if err != nil || alone.HasFallback() {
+		t.Errorf("control: no fallback named gave %v, %v", alone.HasFallback(), err)
 	}
 	if _, err := New(v, nil, Config{Fallback: Role{Provider: fallback}}); err == nil || !strings.Contains(err.Error(), "Config.Model needs a Provider") {
 		t.Errorf("no model: %v", err)
@@ -215,3 +216,33 @@ func TestProgramInReadsTheLastFenceOutsideThinking(t *testing.T) {
 		}
 	}
 }
+
+// Translate asks the roles it names, under the options it is given: the fallback alone, the model
+// alone, and the Config's Grounder in place of the pack's. control: naming neither fails.
+func TestTranslatePicksItsRolesAndOptions(t *testing.T) {
+	v, b := graph(t)
+	g := &named{cands: []nl.Candidate{{Name: "a", Values: []string{"a"}}}}
+	model, fallback := replying(`edge("a", ?x) => ?x`), replying(`edge("a", ?x) => ?x`)
+	tr, err := New(v, nil, Config{Model: Role{Provider: model}, Fallback: Role{Provider: fallback}, Grounder: g})
+	if err != nil {
+		t.Fatal(err)
+	}
+	p, _, err := tr.Translate(context.Background(), "where does a lead?", nl.Options{Base: b}, false, true)
+	if err != nil || p.Model != "fallback" || len(model.reqs) != 0 || len(p.Rows) != 1 {
+		t.Errorf("fallback alone: %+v %v, model asked %d times", p, err, len(model.reqs))
+	}
+	if msg := fallback.reqs[0].Messages[0].Text; !strings.Contains(msg, `a: "a"`) {
+		t.Errorf("the Config's Grounder didn't ground the question: %q", msg)
+	}
+	if p, _, err := tr.Translate(context.Background(), "where does a lead?", nl.Options{}, true, false); err != nil || p.Model != "model" || len(fallback.reqs) != 1 {
+		t.Errorf("model alone: %+v %v", p, err)
+	}
+	if _, _, err := tr.Translate(context.Background(), "q", nl.Options{}, false, false); err == nil {
+		t.Errorf("control: neither role asked answered")
+	}
+}
+
+// named grounds every question with its candidates.
+type named struct{ cands []nl.Candidate }
+
+func (n *named) Ground(context.Context, string) ([]nl.Candidate, error) { return n.cands, nil }

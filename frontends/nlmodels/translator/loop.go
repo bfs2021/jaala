@@ -70,13 +70,12 @@ func (r *role) answer(text string) string {
 // errLowAgreement ends a model's turn whose answer its vote disputed (nl.Options.Escalate).
 var errLowAgreement = errors.New("the drafts agreed too little on an answer")
 
-// run is one question: an nl.Session's pieces on chakra Runners (#496). It is nl.Translate's loop
+// run is one question: an nl.Session's pieces on chakra Runners (#496). It is what nl.Translate's loop was,
 // with chakra doing the asking: a turn per model, each reply judged by the session's Conversation as
 // a TurnEnd hook, the actions as tools, a vote as an agent.Consensus, and the fallback a turn of its
 // own over a fresh conversation.
-func (t *Translator) run(ctx context.Context, question string) (nl.Program, nl.Trace, error) {
-	l := &loop{t: t, start: time.Now()}
-	o := t.opts
+func (t *Translator) run(ctx context.Context, question string, o nl.Options, roles []*role) (nl.Program, nl.Trace, error) {
+	l := &loop{t: t, o: o, start: time.Now()}
 	if o.Budget.Tokens > 0 {
 		ctx = agent.WithTreeBudget(ctx, agent.TreeBudget{MaxTokens: o.Budget.Tokens})
 	}
@@ -86,14 +85,11 @@ func (t *Translator) run(ctx context.Context, question string) (nl.Program, nl.T
 		ctx, cancel = context.WithTimeout(ctx, o.Budget.Time)
 		defer cancel()
 	}
-	s, err := nl.NewSession(ctx, question, t.v, nil, o)
+	s, err := nl.NewSession(ctx, question, t.v, t.grounder, o)
 	if err != nil {
 		return nl.Program{}, l.tr, err
 	}
-	roles := []*role{t.model}
-	if t.fallback != nil {
-		roles = append(roles, t.fallback)
-	}
+	first := roles[0]
 	var last error
 	var held *nl.Program // an answer escalated past, kept in case nothing better comes
 	pick, err := s.Pick()
@@ -101,21 +97,21 @@ func (t *Translator) run(ctx context.Context, question string) (nl.Program, nl.T
 		return nl.Program{}, l.tr, err
 	}
 	if pick != nil {
-		p, history, ok, err := l.pick(ctx, pick, t.model)
+		p, history, ok, err := l.pick(ctx, pick, first)
 		if err != nil {
 			return nl.Program{}, l.tr, err
 		}
 		if ok {
 			p.Confidence = nl.Confidence{Drawn: 1, Agreed: 1, Ran: o.Base != nil, Judged: o.Pack.Check != nil}
 			if o.Vote != nil {
-				if p, err = l.vote(ctx, pick, t.model, history, p); err != nil {
+				if p, err = l.vote(ctx, pick, first, history, p); err != nil {
 					return nl.Program{}, l.tr, err
 				}
 			}
 			if !(o.Escalate > 0 && p.Confidence.Agreement() < o.Escalate) {
 				return p, l.tr, nil
 			}
-			l.tr.Escalations = append(l.tr.Escalations, nl.Escalation{Model: t.model.label, Text: p.Text, Confidence: p.Confidence})
+			l.tr.Escalations = append(l.tr.Escalations, nl.Escalation{Model: first.label, Text: p.Text, Confidence: p.Confidence})
 			held = &p
 		}
 	}
@@ -157,6 +153,7 @@ var errTurnOver = errors.New("translator: the turn ended without an answer")
 // A loop is one question's run: the trace it builds and what it has spent.
 type loop struct {
 	t      *Translator
+	o      nl.Options      // the question's options
 	parent context.Context // the caller's context, under the token budget but not the time one
 	start  time.Time
 	mu     sync.Mutex // tools may run concurrently with each other
@@ -209,7 +206,7 @@ func (l *loop) turn(ctx context.Context, s *nl.Session, c *nl.Conversation, r *r
 	if accepted == nil {
 		return nl.Program{}, nil, errTurnOver
 	}
-	if l.t.opts.Actions != nil && l.t.opts.Actions.Compact {
+	if l.o.Actions != nil && l.o.Actions.Compact {
 		var asked []agent.Message
 		for _, t := range c.Compact() {
 			asked = append(asked, agent.Message{Role: agent.RoleUser, Text: t.Text})
@@ -267,21 +264,17 @@ func (l *loop) spentAll() *nl.BudgetSpent {
 	for _, st := range l.tr.Steps {
 		n += st.TokensIn + st.TokensOut
 	}
-	return &nl.BudgetSpent{Budget: l.t.opts.Budget, Tokens: n, Elapsed: time.Since(l.start)}
+	return &nl.BudgetSpent{Budget: l.o.Budget, Tokens: n, Elapsed: time.Since(l.start)}
 }
 
-// timeUp is the time budget's error once it has run out while the caller's context hasn't, nil
-// before: nothing more is asked or judged then, as nl's Translate checks before each call.
-func (l *loop) timeUp(ctx context.Context) error {
-	if l.parent.Err() == nil && ctx.Err() != nil {
-		return ctx.Err()
-	}
-	return nil
-}
+// timeUp is ctx's error once it is done, nil before: the caller cancelled or the time budget ran
+// out, and nothing more is asked or judged, as nl.Translate did before each call. runTurn
+// tells the two apart by the caller's context.
+func (l *loop) timeUp(ctx context.Context) error { return ctx.Err() }
 
 // language is the front end's language, "" for jaala's.
 func (l *loop) language() string {
-	if fe := l.t.opts.FrontEnd; fe != nil {
+	if fe := l.o.FrontEnd; fe != nil {
 		return fe.Language()
 	}
 	return ""
@@ -327,7 +320,7 @@ func (l *loop) stages(s *nl.Session, c *nl.Conversation, r *role) []agent.StepSt
 		}
 		return v, nil
 	}}}
-	if l.t.opts.Actions != nil && l.t.opts.Actions.Compact {
+	if l.o.Actions != nil && l.o.Actions.Compact {
 		st = append(st, agent.StepStage{Name: "jaala.translator.compact", Scope: agent.ScopeTurn, Run: func(_ context.Context, _ agent.StepInfo, v agent.StepView) (agent.StepView, error) {
 			l.mu.Lock()
 			defer l.mu.Unlock()
@@ -435,7 +428,11 @@ func toolArg(tc agent.ToolCall) string {
 // by the session. It returns the program most draws agree with, first among equals, with Confidence's
 // Drawn and Agreed from the vote, and adds each draw to the Trace's Votes.
 func (l *loop) vote(ctx context.Context, s *nl.Session, r *role, history []agent.Message, first nl.Program) (nl.Program, error) {
-	vt := l.t.opts.Vote
+	vt := l.o.Vote
+	if vt.Total() <= 1 || l.overBudget() {
+		// nothing to draw, or no budget left: chakra's tree budget stops a draw only after its call
+		return first, nil
+	}
 	runner, err := agent.NewRunner(agent.RunnerConfig{
 		Provider:       r.provider,
 		Instructions:   s.Prefix() + r.think,
@@ -505,6 +502,12 @@ func (l *loop) vote(ctx context.Context, s *nl.Session, r *role, history []agent
 	return won, nil
 }
 
+// overBudget says the token budget is spent by the calls in the trace so far.
+func (l *loop) overBudget() bool {
+	b := l.o.Budget.Tokens
+	return b > 0 && l.spentAll().Tokens >= b
+}
+
 // drawnIn are the vote's draws that were asked, the failed included and the unstarted left out, as
 // nl's vote counts them.
 func (l *loop) drawnIn(res *agent.ConsensusResult) []agent.DrawResult {
@@ -517,7 +520,7 @@ func (l *loop) drawnIn(res *agent.ConsensusResult) []agent.DrawResult {
 	return out
 }
 
-// pick asks r to pick one of the pack's Callables (#484), as nl's Translate does first: a turn over
+// pick asks r to pick one of the pack's Callables (#484) first: a turn over
 // the pick's Session, judged by its Conversation. ok is false when the model replied none, failed, or
 // had no pick accepted, and the question is then drafted.
 func (l *loop) pick(ctx context.Context, pick *nl.Session, r *role) (nl.Program, []agent.Message, bool, error) {

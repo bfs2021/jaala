@@ -60,6 +60,7 @@ func dialWith[A any](t *testing.T, o mcp.Options, x func(*ns.Vocabulary) mcp.Ext
 	if o.Base == nil {
 		o.Base = func(context.Context) (*datalog.Base, error) { return b, nil }
 	}
+	withVocabulary(o, v)
 	srv, err := mcp.NewWith(v, pack, o, x(v))
 	if err != nil {
 		t.Fatal(err)
@@ -90,7 +91,7 @@ func schemas(t *testing.T, c *testutil.TestClient) map[string]inputSchema {
 // A host's arguments sit flat beside each tool's own, in every tool, and the schema allows no others.
 func TestHostArgumentsAreFlatOnEveryTool(t *testing.T) {
 	var seen []prepared
-	c := dialWith(t, mcp.Options{Model: &scripted{name: "small"}}, func(v *ns.Vocabulary) mcp.Extension[trip] { return tripHost(t, v, &seen) })
+	c := dialWith(t, mcp.Options{Translator: translating(&scripted{name: "small"})}, func(v *ns.Vocabulary) mcp.Extension[trip] { return tripHost(t, v, &seen) })
 	own := map[string]string{"query": "program", "schema": "path", "explain": "program", "ask": "question", "look": "name", "values": "target"}
 	got := schemas(t, c)
 	if len(got) != len(own) {
@@ -124,7 +125,7 @@ func TestHostArgumentsAreFlatOnEveryTool(t *testing.T) {
 func TestPrepareDecidesWhatTheHostArgumentsMean(t *testing.T) {
 	var seen []prepared
 	small := &scripted{name: "small", replies: []string{`trip.reach(?a, ?b) => ?a, ?b`, `trip.reach(?a, ?b) => ?a, ?b`}}
-	c := dialWith(t, mcp.Options{Model: small}, func(v *ns.Vocabulary) mcp.Extension[trip] { return tripHost(t, v, &seen) })
+	c := dialWith(t, mcp.Options{Translator: translating(small)}, func(v *ns.Vocabulary) mcp.Extension[trip] { return tripHost(t, v, &seen) })
 	program := `trip.reach(?a, ?b) => ?a, ?b`
 	host := map[string]any{"towns": []string{"c", "d"}, "detail": 2}
 	with := func(args map[string]any) map[string]any {

@@ -31,7 +31,7 @@ func TestAskSendsThePacksPrompts(t *testing.T) {
 			p.Prompts = &nl.Prompts{Instructions: "# H-INSTRUCTIONS\n"}
 		}
 		m := &heard{scripted: scripted{name: "small", replies: []string{`trip.reach("a", ?t) => ?t`}}}
-		call(t, dial(t, p, mcp.Options{Model: m}), "ask", map[string]any{"question": "where can a get to?"})
+		call(t, dial(t, p, mcp.Options{Translator: translating(m)}), "ask", map[string]any{"question": "where can a get to?"})
 		if len(m.prompts) != 1 || strings.Contains(m.prompts[0].Prefix, "H-INSTRUCTIONS") != own || strings.Contains(m.prompts[0].Prefix, nl.DefaultPrompts().Instructions) == own {
 			t.Errorf("own prompts %v: asked %d times: %+v", own, len(m.prompts), m.prompts)
 		}

@@ -81,3 +81,20 @@ var Cases = []Case{
 	{Name: "columns", Question: "list every package with its license", Want: [][]string{{"app", "MIT"}, {"api", "absent"}, {"log", ""}, {"util", "Apache-2.0"}}},
 	{Name: "missing", Question: "who maintains api?", Want: [][]string{{"someone"}}},
 }
+
+// CypherDrafts are the Cypher a scripted model writes for the guide's questions (guide.Cases), the ones
+// the drafting arm's TestEval asks in jaala's syntax (nlmodels/translator), in the order it writes them: a right query for each,
+// after a misspelled label for "transitive", which the refusal's did-you-mean fixes, and for "missing",
+// the property the graph doesn't have, which Compile refuses and the model writes again.
+var CypherDrafts = map[string][]string{
+	"what does app import directly?":            {`MATCH (:Package {name: 'app'})-[:IMPORTS]->(d) RETURN d.name`},
+	"what does app depend on, directly or not?": {`MATCH (:Pakage {name: 'app'})-[:IMPORTS*]->(d) RETURN DISTINCT d.name`, `MATCH (:Package {name: 'app'})-[:IMPORTS*]->(d) RETURN DISTINCT d.name`},
+	"what license does util have?":              {`MATCH (p:Package {name: 'util'}) RETURN p.license`},
+	"which packages have no license stated?":    {`MATCH (p:Package) WHERE p.license IS NULL RETURN p.name`},
+	"how many packages does app depend on?":     {`MATCH (:Package {name: 'app'})-[:IMPORTS*]->(d) RETURN count(DISTINCT d)`},
+	"what imports util?":                        {`MATCH (x:Package)-[:IMPORTS]->(:Package {name: 'util'}) RETURN x.name`},
+	"list every package with its license":       {`MATCH (p:Package) RETURN p.name, p.license`},
+	"who maintains api?":                        {`MATCH (p:Package {name: 'api'}) RETURN p.maintainer`, `MATCH (p:Package {name: 'api'}) RETURN p.maintainer`},
+}
+
+// frontends/cypher's FuzzCompile seeds from them, and nlmodels/cypherarm's TestEval writes them.

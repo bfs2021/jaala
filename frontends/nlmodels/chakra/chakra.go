@@ -16,7 +16,7 @@ type Model struct {
 	// Provider answers each prompt with one Generate call. What else goes with the prompt is what
 	// agent.CapabilitiesOf says it can send: the grammar when it takes a GBNF grammar (llama.cpp,
 	// vLLM), and a vote's seed when it takes a seed (any OpenAI-compatible server). Ollama takes
-	// only a JSON schema and Anthropic neither, so they get the prompt alone, and nl.Translate
+	// only a JSON schema and Anthropic neither, so they get the prompt alone, and nl.Extract
 	// checks every draft anyway.
 	Provider agent.Provider
 	// Label names the model in the Trace and Program.Model.

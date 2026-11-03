@@ -1,7 +1,6 @@
 package nl
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"slices"
@@ -28,8 +27,6 @@ type Vote struct {
 	Parallel bool
 }
 
-func (v *Vote) drafts() int { return v.Total() }
-
 // Total is how many answers the vote counts, the first included: Drafts, or 3 when it is 0.
 func (v *Vote) Total() int {
 	if v.Drafts > 0 {
@@ -38,7 +35,7 @@ func (v *Vote) Total() int {
 	return 3
 }
 
-// Confidence is what Translate knows about an answer it accepted, for a host to judge it by
+// Confidence is what the translator knows about an answer it accepted, for a host to judge it by
 // (Options.Escalate reads Agreement).
 type Confidence struct {
 	// Drawn is how many answers a Vote drew (1 without one) and Agreed how many of them answered as
@@ -59,7 +56,7 @@ func (c Confidence) Agreement() float64 {
 	return float64(c.Agreed) / float64(c.Drawn)
 }
 
-// An Escalation is an answer Translate moved on from because its drafts agreed less than
+// An Escalation is an answer the translator moved on from because its drafts agreed less than
 // Options.Escalate asks.
 type Escalation struct {
 	Model      string
@@ -67,17 +64,17 @@ type Escalation struct {
 	Confidence Confidence
 }
 
-// A Budget caps what Translate spends on one question, across every action, try and vote (#393,
+// A Budget caps what the translator spends on one question, across every action, try and vote (#393,
 // declaire#300). A zero field is no cap.
 type Budget struct {
 	// Tokens caps the prompt and reply tokens of every model call together.
 	Tokens int
-	// Time caps how long Translate runs. A deadline on its context stops it too, with the context's
+	// Time caps how long the translator runs. A deadline on its context stops it too, with the context's
 	// error rather than a BudgetSpent.
 	Time time.Duration
 }
 
-// A BudgetSpent is Translate's error when its Budget ran out before an answer was accepted. The
+// A BudgetSpent is the translator's error when its Budget ran out before an answer was accepted. The
 // Trace still holds every call made.
 type BudgetSpent struct {
 	Budget  Budget
@@ -89,7 +86,7 @@ func (e *BudgetSpent) Error() string {
 	return fmt.Sprintf("nl: budget spent before an answer: %d tokens in %v (budget %d tokens, %v)", e.Tokens, e.Elapsed.Round(time.Millisecond), e.Budget.Tokens, e.Budget.Time)
 }
 
-// spending tracks a Translate's spend against its Budget.
+// spending tracks Extract's spend against its Budget.
 type spending struct {
 	budget Budget
 	start  time.Time
@@ -146,70 +143,6 @@ func (t Try) Class() string {
 		return ClassSemantics
 	}
 	return ClassConstruct
-}
-
-// vote draws o.Vote's other drafts from model, asked p with only the answer's grammar, and returns
-// the program the most drafts agree with, first among equals, with its Confidence's Drawn and Agreed
-// set, and every draft it drew. A draft the budget leaves no room for isn't drawn.
-func vote(ctx context.Context, model Model, p Prompt, first Program, s *Session, vt *Vote, spend *spending) (Program, []Try) {
-	n := vt.drafts()
-	draws := make([]Try, n-1)
-	progs := make([]Program, n-1)
-	drawn := make([]bool, n-1)
-	ask := func(i int) {
-		if spend.check() != nil || ctx.Err() != nil {
-			return
-		}
-		q := p
-		q.Draw = i + 1
-		try, err := complete(ctx, model, q)
-		drawn[i] = true
-		if err != nil {
-			if s.o.FrontEnd != nil {
-				try.Language = s.o.FrontEnd.Language()
-			}
-			draws[i] = try
-			return
-		}
-		spend.add(try.TokensIn, try.TokensOut)
-		draws[i], progs[i], _ = s.Draw(ctx, try)
-	}
-	if vt.Parallel {
-		var wg sync.WaitGroup
-		for i := range draws {
-			wg.Go(func() { ask(i) })
-		}
-		wg.Wait()
-	} else {
-		for i := range draws {
-			ask(i)
-		}
-	}
-	all, agrees := []Program{first}, []bool{true}
-	var tries []Try
-	for i := range draws {
-		if drawn[i] {
-			tries = append(tries, draws[i])
-			all, agrees = append(all, progs[i]), append(agrees, draws[i].Err == nil) // a refused draft agrees with nothing
-		}
-	}
-	counts := map[string]int{}
-	keys := make([]string, len(all))
-	for i, prog := range all {
-		if agrees[i] {
-			keys[i] = s.Key(prog)
-			counts[keys[i]]++
-		}
-	}
-	best := 0
-	for i := range all {
-		if agrees[i] && counts[keys[i]] > counts[keys[best]] {
-			best = i
-		}
-	}
-	won := all[best]
-	won.Confidence.Drawn, won.Confidence.Agreed = len(all), counts[keys[best]]
-	return won, tries
 }
 
 // voteKey is what two drafts agree on: their rows as a multiset of values when they ran, or else the

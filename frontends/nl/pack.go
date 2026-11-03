@@ -13,7 +13,7 @@ import (
 // A Pack is what a host knows about its domain beyond its vocabulary (#344): what the data is about,
 // what it holds, programs that answer typical questions, how a question's names map to values, and
 // what makes an answer suspect. Declaire's code graph, Agni's schematics and a maps app's routes are
-// each a pack over the same Translate. Options.Pack hands it to Translate, and a host checks it on its
+// each a pack over the same translator. Options.Pack hands it to the translator, and a host checks it on its
 // own with Validate, so a broken example fails its test rather than a model's prompt. Every field is
 // optional.
 type Pack struct {
@@ -28,17 +28,17 @@ type Pack struct {
 	// Examples are questions with the programs that answer them, one or two per construct (a join,
 	// negation, a rule, an aggregate, a walk). How to call one relation belongs in its doc instead.
 	Examples []Example
-	// Grounder grounds the question's names when Translate is called with a nil Grounder.
+	// Grounder grounds the question's names when the translator is called with a nil Grounder.
 	Grounder Grounder
 	// Check, when set, judges a program that checked and, over Options.Base, answered: an error refuses
 	// it as KindAnswer and goes back to the model, as a check error does, with the error's text. It is
 	// for what makes an answer suspect in this domain, such as every value absent or far more rows
-	// than the question could mean. p.Rows is nil when Translate has no Base.
+	// than the question could mean. p.Rows is nil when the translator has no Base.
 	Check func(ctx context.Context, p Program) error
 	// Hint, when set, says what the data holds where an empty answer lost its last binding: given
 	// why (never nil), the values its culprit's constants could have meant, in the host's terms ("no
 	// node kind entity; the kinds are package, func, type"). jaala names the call that matched nothing
-	// and whether it matches alone; only the host knows its data's spellings (#343). Translate adds
+	// and whether it matches alone; only the host knows its data's spellings (#343). The translator adds
 	// the hint to an empty draft's feedback, and frontends/mcp to an empty answer of query, cypher and
 	// explain. "" adds nothing. It runs once per empty answer, so it should cost a few lookups.
 	Hint func(ctx context.Context, why *datalog.EmptyReport) string
@@ -49,7 +49,7 @@ type Pack struct {
 	// (#183), so this is the host's to say.
 	Keys map[string][]int
 	// Callables are the relations that answer a kind of question on their own (#484). When set,
-	// Translate first asks the model to pick one and fill its arguments, and drafts a program only
+	// The translator first asks the model to pick one and fill its arguments, and drafts a program only
 	// when it replies none or no call it picks is accepted.
 	Callables []Callable
 	// Prompts, when set, replaces the text jaala writes around the pack's own, field by field (#485):
@@ -57,7 +57,7 @@ type Pack struct {
 	// nil, or a field left "", keeps jaala's (DefaultPrompts).
 	Prompts *Prompts
 	// ExtractExamples are texts with the lines Extract should write for them, which follow the pack's
-	// About and Card in Extract's prefix. Translate doesn't read them.
+	// About and Card in Extract's prefix. The translator doesn't read them.
 	ExtractExamples []ExtractExample
 }
 
@@ -70,7 +70,7 @@ type Example struct {
 // Validate checks that every example parses and checks against v, so a pack can't teach a model a
 // relation v doesn't have, that every callable is a relation of v described at its arity, that every key names a base relation of v and positions within its
 // arity, and that every extraction example's lines are facts its text states. The error names the
-// first that doesn't. Translate and Extract call it before asking any model.
+// first that doesn't. The translator and Extract call it before asking any model.
 func (p *Pack) Validate(v *ns.Vocabulary) error {
 	for i, e := range p.Examples {
 		q, err := datalog.Parse(e.Program)
@@ -111,7 +111,7 @@ func (p *Pack) Validate(v *ns.Vocabulary) error {
 	return nil
 }
 
-// Prefix is the pack's part of a Prompt's Prefix, which Translate puts after the card and its
+// Prefix is the pack's part of a Prompt's Prefix, which the translator puts after the card and its
 // instructions: About as comment lines, Card as written, then the examples, each question as a
 // comment over its program. The same pack always gives the same text, so the prefix stays cacheable.
 func (p *Pack) Prefix() string {

@@ -93,41 +93,45 @@ GOARCH=wasm go test ./ns` (#417 ran `ns` that way).
   type error its constant, so `Locate` finds the call holding that value, the variable at its
   comparison, or for a call arithmetic wrote (`num.mul` for `?a * ""`) the constant itself (#353). A new check builds one (`checkErr(kind, msg)`, `b.arityErr`, `b.unknownErr`), and
   `TestBrokenProgramsFailTheSameWay` requires each broken literal's error to be one Locate finds.
-  `nl` (the card, Explain, `Translate`) imports `ns` and `datalog`, is a module of its own (#359; CI's
-  `nl` job), and nothing in the root imports it.
-  `Translate` (#325) runs no model: `Model` and `Grounder` are the host's, a refused draft goes back
-  with `Explain`'s text, a `Complete` error, a repeated draft (#340, refused unchecked) or an empty
-  answer (over `Options.Base`) moves straight to the fallback, which starts a fresh conversation (an
-  empty answer with no fallback left goes back to the model, and its first repeat of that draft is
-  asked again with the reason, the call to change and the grounded values, `Try.Reasked`, #483), and `Try.Kind` adds `parse`, `eval`,
-  `empty`, `repeat` and `model` to a `CheckError`'s kinds. An unknown call's `Fix` names the program's
+  `nl` (the card, Explain, the `Session`) imports `ns` and `datalog`, is a module of its own (#359; CI's
+  `nl` job), and nothing in the root imports it. It runs no model and keeps no agent loop since #496:
+  the loop is `nlmodels/translator`'s, on chakra Runners, over nl's `Session` (below). A refused draft
+  goes back with `Explain`'s text, a failed model call, a repeated draft (#340, refused unchecked) or
+  an empty answer (over `Options.Base`) moves straight to the fallback, which starts a fresh
+  conversation (an empty answer with no fallback left goes back to the model, and its first repeat of
+  that draft is asked again with the reason, the call to change and the grounded values,
+  `Try.Reasked`, #483), and `Try.Kind` adds `parse`, `eval`, `empty`, `repeat` and `model` to a
+  `CheckError`'s kinds. An unknown call's `Fix` names the program's
   own rule it likely means (`localFix`, #341, at `Validate` and `evaluate`, since the vocabulary's
-  suggestion can't see the rules). Its tests script the model (`scripted`), so tries are exact.
+  suggestion can't see the rules). The translator's tests script the model (`scripted`), so tries are exact.
   A draft run over the Base keeps its `datalog.Report` (`Try.Report`), and an empty answer's error
   is an `EmptyAnswer` carrying `Report.Empty`, whose text goes back to the model (#343);
   `nl.Report.Costliest` ranks drafts by work, and its work column shows only when one was evaluated.
   A host's domain is an `nl.Pack` (`Options.Pack`, #344): `About`, `Card`, `Examples` (checked by
-  `Pack.Validate` before any model is asked), a `Grounder` used when Translate's is nil, and a `Check`
+  `Pack.Validate` before any model is asked), a `Grounder` used when the translator's is nil, and a `Check`
   that refuses an answer as `answer`, back to the same model. Its `Prefix()` follows the card and the
   instructions. `nl.DataCard(ctx, b)` writes the generic half of `Card` with one counting program per
   argument (named variables, so `count` counts facts); #347's MCP server reads the same pack.
   `nl.Eval` (#326) scores a `translate` func over `Case`s, matching a row by its values as a multiset
   (the model picks the columns' names and order) and rows as a multiset unless `Ordered`. `TestEval`
-  is #322's exercise until Declaire's arm runs: the guide's vocabulary, a scripted small model and
-  fallback (`byQuestion`), and the report in `frontends/nl/testdata/eval.golden` (`-update`).
-  `Options.Actions` (#393, `actions.go`) lets a model reply `look`, `values` or `try` before its
-  answer: each is a `Trace.Steps` entry, not a `Try`, so first-try counts answers, and the grammar
-  wraps the draft's (`actionGrammar` renames its root `program`). The loop is language-blind: `try`
-  runs through the front end, and a front end that is an `nl.Prober` (Cypher's) writes `look` and
-  `values` in its terms. Off by default, so `TestEval`'s goldens don't move. `find NAME` asks the
-  Grounder mid-loop, offered only when there is one. `Options.Vote` (`vote.go`) draws more answers
-  once one is accepted, each with `Prompt.Draw` (nlmodels seeds by it; at temperature 0 a vote agrees
-  by construction), keeps the rows most agree on (`voteKey`, a refused draft agreeing with nothing),
+  (in `frontends/nlmodels/translator` since #496) is #322's exercise until Declaire's arm runs: the
+  guide's vocabulary, a scripted small model and fallback (`byQuestion`), and the report in its
+  `testdata/eval.golden` (`-update`).
+  `Options.Actions` (#393, `actions.go`) lets a model take `look`, `values`, `try` and `find` before
+  its answer, as the translator's chakra tools (`Actions.AsTools`, which the translator sets), or read
+  from the reply under a grammar wrapping the draft's (`actionGrammar` renames its root `program`) for
+  a host's own loop with it off: each is a `Trace.Steps` entry, not a `Try`, so first-try counts
+  answers. The actions are language-blind: `try` runs through the front end, and a front end that is
+  an `nl.Prober` (Cypher's) writes `look` and `values` in its terms. Off by default, so `TestEval`'s
+  goldens don't move. `find` asks the Grounder, offered only when there is one. `Options.Vote`
+  (`vote.go`) draws more answers once one is accepted (the translator's `agent.Consensus`, seeded per
+  draw; at temperature 0 a vote agrees by construction), keeps the rows most agree on (`voteKey`,
+  `Session.Key`, a refused draft agreeing with nothing),
   and sets `Program.Confidence`; `Options.Escalate` moves a disputed answer to the fallback, keeping it
   if nothing better comes (`Trace.Escalations`); `Options.Budget` caps tokens and time
   (`*BudgetSpent`). `Options.Abstain` (`abstain.go`, #482) turns a disputed answer, running out of
-  tries or the budget into an `*Abstained` with the closest draft; `Translate` is `translate` passed
-  through `Abstain.judge`, and a model failing never abstains. `Try.Class` and `Result.Class` sort failures as grounding, construct,
+  tries or the budget into an `*Abstained` with the closest draft, through `Abstain.Judge`, and a model
+  failing never abstains. `Try.Class` and `Result.Class` sort failures as grounding, construct,
   semantics, budget or model (and a case as `abstained`), reading a `CheckError` before `KindAnswer`, since datalog's order-by
   kind is spelled `answer` too; `Report.Failures` counts them, outside `String`, so goldens hold.
   With `Actions`, `state.go`'s `memory` keeps the text values actions showed (`act` returns them), and
@@ -135,9 +139,9 @@ GOARCH=wasm go test ./ns` (#417 ran `ns` that way).
   exactly one other spelling (`spelling`: letters and digits, lower-cased) rewritten, from those and
   the refused argument's Domain (`domainOf`); the rewrite is kept only if it then passes, as a `Try`
   with `Repair`. `Actions.Compact` sends `memory.compact`'s one turn instead of the conversation.
-  `Pack.Callables` (#484, `callable.go`) are relations answering a question alone: `translate` first
-  asks the first model to pick one (`pickCall`: About, Card and the catalogue, a grammar of `none` or a
-  listed call, `pickTries` 2), a bare call being a program whose rows bind its variables; a `none` is a
+  `Pack.Callables` (#484, `callable.go`) are relations answering a question alone: the translator first
+  asks the first model to pick one (`Session.Pick`: About, Card and the catalogue, a grammar of `none`
+  or a listed call, `pickTries` 2), a bare call being a program whose rows bind its variables; a `none` is a
   Step, a pick a `Try` with `Mode` `call`, and anything else falls through to drafting. A pick is
   jaala's text under any FrontEnd, voted on with its own prompt and escalated past like a draft.
   `TestEvalCallable` is the pick arm (`testdata/eval_call.golden`), `TestEval` the drafting arm.
@@ -145,25 +149,30 @@ GOARCH=wasm go test ./ns` (#417 ran `ns` that way).
   replaces word for word, read through `Pack.prompts()` (nil-safe, field by field over
   `DefaultPrompts`); a new piece of prompt text goes there too, with a test in `prompts_test.go`. Its
   templates (`templates()`) are checked by `Pack.Validate` and up front in `NewSession`.
-  `translate` is a loop over an `nl.Session` (`session.go`, #496), the question's half that is jaala's:
+  An `nl.Session` (`session.go`, #496) is the question's half that is jaala's:
   `NewSession` writes the prefix, grounds and picks the grammar, `Act` runs an action, `Draw` and `Key`
   judge and key a vote's draw, `Pick` is the callables' first step, and a `Conversation` per model
   judges each reply into a `Verdict` (the accepted `Program`, `Continue` with what to tell the model,
   or `Stop`), shaped like chakra's `TurnEndVerdict` without importing it. `Conversation.Act` counts
   the actions (`AskedAgain`, `LastLook`), and `Session.Tools` describes them for a loop offering them
   as tools (`Actions.AsTools`, `Prompts.ToolLook` and its siblings). A change to how a reply is judged
-  goes in `session.go`, where both loops get it. `nlmodels/translator`'s `Ask` runs the same Session on
+  goes in `session.go`. `nlmodels/translator`'s `Ask` runs the Session on
   chakra Runners (`loop.go`, #496): a turn per model, `Conversation.Judge` as its `TurnEnd` hook
   (`Continue` with `AsUser`), the actions a `FuncSource` that a request stage drops once `MaxSteps` are
   used, compaction a turn stage (chakra's guided finalizing call reads the working messages, never a
   request stage's), a vote an `agent.Consensus` with the accepted answer as its `Prior` and the
   conversation flattened to text (`answered`), the time budget checked in each stage and hook, and a
-  Try's tokens what the turn spent since the last Try or Step. `differential_test.go` holds it to
-  `nl.Translate` over TestEval's and TestEvalCallable's scripts and arms for actions, a repair,
-  compaction, votes, escalation and a failing model: the same outcomes, and on the arms without
-  actions the same requests word for word. A loop change that the differential can't see needs a
-  test of its own (`loop_test.go`), and `server_test.go` runs the loop on selfcheck's `llama-server`,
-  whose 1 MB model caps a slot at 2048 tokens, so its vocabulary leaves out stdlib.
+  Try's tokens what the turn spent since the last Try or Step. Before `nl.Translate` went, #500's
+  differential held the Runner to it over every eval script and arms for actions, votes and escalation,
+  outcome for outcome and request for request; its tests then moved to `nlmodels/translator` with a
+  shim (`translate`, `internal/modeltest`: an `nl.Model` as a chakra Provider, its requests read back
+  as `nl.Prompt`s, a text action played as a tool call when the request offers that tool, chakra's
+  guided finalizing call answered without asking the model), and their goldens didn't move.
+  `differential_test.go` keeps its arms as path checks, `loop_test.go` what no moved test sees (tokens,
+  the budget, tools dropped), and `server_test.go` runs the loop on selfcheck's `llama-server`, whose
+  1 MB model caps a slot at 2048 tokens, so its vocabulary leaves out stdlib. Cypher's translator tests
+  and its `TestEval` are `nlmodels/cypherarm`'s, so nlmodels requires the cypher module (its tests
+  only), and `internal/guide.CypherDrafts` feeds both that eval and cypher's `FuzzCompile` seeds.
 - **`nl.Grammar()` is GBNF built from a rule table** (`frontends/nl/grammar.go`, #323), and every text it
   accepts must parse: `TestEveryProgramTheGrammarWritesParses` samples 21,000 programs from the table
   over 70 seeds and every depth (one seed alone missed `-(9)` as a column). The other direction lives
@@ -181,19 +190,21 @@ GOARCH=wasm go test ./ns` (#417 ran `ns` that way).
   sublanguage. The recognizer lives in `internal/gbnf` for both packages' tests, beside the table
   types, `Render` and the `Sampler` (#354, shared with the Cypher grammar; nl keeps its own short
   types and converts with `table`, since vet refuses unkeyed literals of another package's structs,
-  and `program.gbnf` must come out byte-identical). `Translate` sends
-  it as `Prompt.Grammar`.
-- **`frontends/nlmodels` is a module of its own** (#330): its `chakra` package is an `nl.Model` over
-  any chakra `Provider` (#487), and jaala keeps no model client of its own. llama.cpp and Ollama are
-  chakra's presets (`agent.NewLlamaCppProvider`, `agent.NewOllamaProvider`, chakra#180, v0.2.2); the
-  Model sends the grammar and a vote's seed only when `agent.CapabilitiesOf` says the provider can
-  (llama.cpp both, Ollama a seed, Anthropic neither) and a temperature only where it says `Temperature`. `New` sends `Temperature` 0, since chakra omits
-  a nil one and llama-server then samples at 0.8; a host on Anthropic sets it nil. Its `translator`
+  and `program.gbnf` must come out byte-identical). The translator holds
+  each answer to it (`ResponseGuided`) when the provider takes a grammar.
+- **`frontends/nlmodels` is a module of its own** (#330), and jaala keeps no model client of its
+  own: it asks any chakra `Provider` (#487). llama.cpp and Ollama are chakra's presets
+  (`agent.NewLlamaCppProvider`, `agent.NewOllamaProvider`, chakra#180, v0.2.2); the grammar and a
+  vote's seed go only where `agent.CapabilitiesOf` says the provider can (llama.cpp both, Ollama a
+  seed, Anthropic neither) and a temperature only where it says `Temperature`, which is 0 by default,
+  since chakra omits a nil one and llama-server then samples at 0.8. Its `chakra` package is an
+  `nl.Model` over a provider, which `nl.Extract` still asks through. Its `translator`
   package (#490) is the entry point a host calls (`translator.New(v, pack, cfg)`, `Ask`): jaala owns
   each role's tuning (temperature 0 and a fallback's 0.7, 512 tokens, a `Thinking` model's 3072, no
   grammar, a think line and its last fenced block), a `Role` overrides it, and a temperature goes only to a provider whose
-  `CapabilitiesOf` says it takes one (chakra#191, v0.2.4). jaala's agent loop
-  moves onto chakra from here, jaala as a helper a chakra agent plugs in, never a wrapper over it.
+  `CapabilitiesOf` says it takes one (chakra#191, v0.2.4). jaala's agent loop runs on chakra (#496),
+  jaala the Session a chakra agent plugs in, never a wrapper over it. `Translate(ctx, q, o, model,
+  fallback)` is `Ask` under per-call options and roles, which is `mcp.Translator`'s method.
   CI's `nlmodels` job tests it; the root's `./...` doesn't reach it. Like every
   sub-module it requires jaala and `frontends/nl` at the last release and replaces both with the
   checkout (Releasing). A consumer must not pair the nl module with a jaala tag up to v0.1.71,
@@ -209,8 +220,10 @@ GOARCH=wasm go test ./ns` (#417 ran `ns` that way).
   host that doesn't serve agents; CI's `mcp` job tests it, and `SUB_MODS_TO_TAG` tags it. `mcp.New(v,
   pack, opts)` registers `query` (rows with witnesses, paged by an offset `page_token`, errors as tool
   errors carrying `nl.Explain`'s text), `schema` (the card, filtered by a module's or relation's
-  path, and the pack's `Card` at `data`), `explain` (`Report.String`) and, with `Options.Model`,
-  `ask` (`nl.Translate` with the pack, `mode` local/frontier/both, panyam/declaire#300, and
+  path, and the pack's `Card` at `data`), `explain` (`Report.String`) and, with `Options.Translator`
+  (an `mcp.Translator`, which nlmodels' `translator.Translator` is, so this module imports no model
+  client; the docsite's `mcp_test.go` holds the two to it, and mcp's own tests use a Session loop of
+  their own, `sessions`), `ask` (the translator with the pack, `mode` local/frontier/both, panyam/declaire#300, and
   `language` datalog/cypher, #386: Cypher through `cypher.NewFrontEnd` with `Pack.CypherExamples`,
   `Pack.AskLanguage` the default, answered as the `cypher` tool answers). The
   instructions are written from the pack (`mcp.Instructions`, sent with mcpkit's `WithInstructions`,
@@ -359,9 +372,10 @@ GOARCH=wasm go test ./ns` (#417 ran `ns` that way).
   issue (#279 to #289, #364 for CALL { } and an order or limit in a WITH or union part, #398 for
   the paths #280 left: ALL SHORTEST, SHORTEST k, several relationships, quantified path patterns), tested by position in
   `TestGapsAreRefusedByName`; its known differences from a Cypher engine (distinct rows,
-  reachability rather than trails, a Props read as a match) are in `doc.go`. `TestEval` scores the
-  guide's questions in Cypher with `nl.Eval` (`internal/guide` is the fixture both front ends'
-  `TestEval` share, `testdata/eval.golden`, `-update`), and `FuzzCompile` (in selfcheck) requires
+  reachability rather than trails, a Props read as a match) are in `doc.go`. Its `TestEval` scores the
+  guide's questions in Cypher with `nl.Eval` on the translator, in `nlmodels/cypherarm` since #496
+  (`internal/guide` is the fixture both front ends' `TestEval` share, `testdata/eval.golden`,
+  `-update`), and `FuzzCompile` (in selfcheck) requires
   any text to compile to a program that validates, or to fail with an `*Error` or a type error
   the query itself makes. A `(` in an expression is tried as a pattern first and rewound
   on failure; `parser.notPattern` keeps each failed attempt by token index, so a deep nesting parses in
@@ -1185,11 +1199,11 @@ GOARCH=wasm go test ./ns` (#417 ran `ns` that way).
   ran is still in its delta; `TestRoundOneRereadsWhatRoundZeroRevisedAfterARuleRan` guards that,
   since the corpus doesn't reach it.
 - **A name added to stdlib moves more than stdlib's tests** (#360). The plain-language card lists every
-  member, so `frontends/nl`'s `card.golden` and `eval.golden` (`-update`) and the docsite's
+  member, so `frontends/nl`'s `card.golden`, `nlmodels/translator`'s `eval.golden` (`-update`) and the docsite's
   `Example_card` (`examples/guide/plainlang_test.go`, edited by hand) change, as do the two datalog
   tests listing `str`'s members (`checkerror_test.go`, `namespace_test.go`). `TestEveryBuiltinHasADemo`
   wants a `demos/reference/builtins-*.yaml` calling it, and a new error message the catalogue. Each line
-  is prompt cost for every `nl.Translate` call (#360's six took `TestEval` from 10,401 tokens to
+  is prompt cost for every translation (#360's six took `TestEval` from 10,401 tokens to
   14,190), so keep a builtin's `Doc` short. A text function is a relation with its result last, like
   `num.*`, so expressions take it with no engine change; an absent input gives no row. An argument taking
   values its enumeration never lists (`str.split`'s and `str.find`'s negative index) is marked
@@ -1273,12 +1287,12 @@ jaala a helper a chakra agent plugs in, with the translator entry point (#490), 
 the re-ask (#483) and host prompt overrides (#485). It waits on Declaire: declaire#357 (the entry
 point), declaire#74 (its relations callable) and a rerun of its arms on declaire#288. jaala's half is `frontends/nl` and `frontends/nlmodels`
 (#321, #323 to #326, #330, #331, #336, #337, released in v0.1.66 and frontends/nlmodels/v0.1.66);
-`go test -run TestEval -v .` in `frontends/nl` is its jaala-side exercise (fix line 5/5). Declaire's
+`go test -run TestEval -v .` in `frontends/nlmodels/translator` is its jaala-side exercise (`frontends/nl` until #496; fix line 5/5). Declaire's
 translator-alone arm (declaire#295, for declaire#290) first ran on v0.1.66 and passed 2 of 14 on
 Qwen2.5-Coder 7B against declaire#288's bar of 10; its jaala asks became #340 and #341 (PR #342,
 released in v0.1.67). Declaire's 32B run then stopped on an unexplained empty answer on 6 of its
 11 failures (declaire#296), which became #343 and #348 (PRs #346 and #349, released in v0.1.68):
-`Report.Empty` names the culprit and whether it matches alone, and `Translate` sends that back.
+`Report.Empty` names the culprit and whether it matches alone, and the translator sends that back.
 #344 (domain packs, `nl.Pack` and `nl.DataCard`, PR #350, v0.1.69) and #347 (`frontends/mcp`, an
 MCP server for any vocabulary that a host wraps with its pack, PR #351, v0.1.70 and the first
 `frontends/mcp/v0.1.70`) followed; Declaire moves its translator and server onto them in
@@ -1288,9 +1302,9 @@ declaire#288's translator line rather than quoting its number, which is Declaire
 an agent or the model translating for it writes Cypher, and `frontends/cypher` compiles it into a
 program that checks, so Declaire can measure whether Cypher or jaala's syntax costs an agent less per
 correct answer (declaire#288's "one arm per front end"; the arms are declaire#248). Its tickets: #352
-(the compiler over a graph view of a vocabulary, and `go test -run TestEval -v .` in `frontends/cypher`,
+(the compiler over a graph view of a vocabulary, and `go test -run TestEval -v .` in `frontends/cypher`, `nlmodels/cypherarm` since #496,
 `nl`'s cases in Cypher; PRs #359 and #369), #353 (errors located in the Cypher text, #372), #354
-(`nl.Translate` writing Cypher, the 32B arm) and #355 (`frontends/mcp` taking Cypher, closed by
+(the translator writing Cypher, the 32B arm) and #355 (`frontends/mcp` taking Cypher, closed by
 #366's `cypher` tool and `cypher.Store`, PR #368). #279 (facts as terms, #371) came out of
 `waiting` beside them; the other gaps (#280 to #284) and #364 (`CALL { }`, an order or limit in a
 stage) stay `waiting` until an exercise case is refused for one. The two store missions closed on 2026-10-16. `mission_store_federation` (#219), a host answers a question over many stores without holding them

@@ -5,7 +5,7 @@ import (
 	"fmt"
 )
 
-// Abstain says when Translate answers "not confident", an *Abstained, in place of an answer it
+// Abstain says when the translator answers "not confident", an *Abstained, in place of an answer it
 // doubts or a bare failure (#482). For a caller who acts on the answer, a wrong one costs more than
 // none, and a host that can tell "not confident" from "broke" can say so, or hand the closest draft to
 // the caller to finish. A zero field never abstains on its ground. A Model that fails, a cancelled
@@ -13,7 +13,7 @@ import (
 type Abstain struct {
 	// MinAgreement abstains on an accepted answer whose Confidence.Agreement is below it. Like
 	// Escalate it needs a Vote, since without one every answer agrees with itself. Escalate runs
-	// first, so the answer judged is the one Translate would have returned, a held one included.
+	// first, so the answer judged is the one the translator would have returned, a held one included.
 	MinAgreement float64
 	// NoAnswer abstains when the tries ran out with no draft accepted, a loop that ended on a
 	// repeated draft included.
@@ -30,7 +30,7 @@ const (
 	AbstainBudget       = "budget"        // Options.Budget ran out
 )
 
-// Abstained is Translate saying it has no answer it's confident of (Options.Abstain), with the draft
+// Abstained is the translator saying it has no answer it's confident of (Options.Abstain), with the draft
 // that came closest for a host to show or a caller to finish.
 type Abstained struct {
 	// Reason is one of the Abstain* constants.
@@ -44,7 +44,7 @@ type Abstained struct {
 	// Diagnosis says why Draft wasn't taken, as the model was told: Explain's text in the draft's
 	// language, or how many drafts agreed.
 	Diagnosis string
-	// Err is the error Translate would have returned without Abstain, nil for low agreement.
+	// Err is the error the translator would have returned without Abstain, nil for low agreement.
 	// Abstained unwraps to it, so errors.As still finds a BudgetSpent or the last try's CheckError.
 	Err error
 }
@@ -60,11 +60,11 @@ func (a *Abstained) Error() string {
 func (a *Abstained) Unwrap() error { return a.Err }
 
 // ErrNoProgram is what a translation fails with when every model ran out of tries, or stopped,
-// with no draft accepted: Translate's error wraps it, and so must another loop's for Abstain.Judge
+// with no draft accepted: the translator's error wraps it, and so must another loop's for Abstain.Judge
 // to read it as no answer.
 var ErrNoProgram = errors.New("nl: no program checked")
 
-// Judge turns what a translation would return into an abstention when a's policy says so: Translate
+// Judge turns what a translation would return into an abstention when a's policy says so: the translator
 // passes its result through it, and another loop over a Session passes its own. A nil a returns
 // them unchanged.
 func (a *Abstain) Judge(p Program, tr Trace, err error) (Program, Trace, error) {

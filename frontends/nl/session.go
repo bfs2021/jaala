@@ -11,8 +11,8 @@ import (
 
 // A Session is one question's half of a translation that is jaala's (#496): the prompt, the grammar,
 // the actions, how a reply is judged and how two answers are told apart. It runs no model and keeps
-// no loop. Translate drives one with its own, and an agent framework's loop can drive one the same
-// way, asking the model itself and handing each reply to a Conversation.
+// no loop: nlmodels' translator drives one on chakra Runners, and any agent framework's loop can
+// drive one the same way, asking the model itself and handing each reply to a Conversation.
 //
 // A Session is not safe for concurrent use, except Draw and Key, which read nothing it changes.
 type Session struct {
@@ -27,9 +27,9 @@ type Session struct {
 	pick                                bool
 }
 
-// NewSession prepares question over v, as Translate does before asking any model: it checks the
+// NewSession prepares question over v, as the translator does before asking any model: it checks the
 // pack's prompt templates and examples, writes the prefix, grounds the question (with g, or the
-// pack's Grounder when g is nil) and picks the grammar. An error is one Translate would fail with.
+// pack's Grounder when g is nil) and picks the grammar. An error is one the translator would fail with.
 func NewSession(ctx context.Context, question string, v *ns.Vocabulary, g Grounder, o Options) (*Session, error) {
 	if o.Pack != nil && g == nil {
 		g = o.Pack.Grounder

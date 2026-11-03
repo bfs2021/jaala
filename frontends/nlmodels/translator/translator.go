@@ -14,7 +14,6 @@ import (
 	agent "github.com/panyam/chakra"
 	"github.com/panyam/jaala/datalog"
 	"github.com/panyam/jaala/frontends/nl"
-	"github.com/panyam/jaala/frontends/nlmodels/chakra"
 	"github.com/panyam/jaala/ns"
 )
 
@@ -56,8 +55,13 @@ type Role struct {
 type Config struct {
 	// Model is asked first. Its Provider is required.
 	Model Role
-	// Fallback, when its Provider is set, is asked once Model runs out of tries (nl.Options.Fallback).
+	// Fallback, when its Provider is set, is asked once Model runs out of tries, repeats a draft it
+	// was told was wrong, or writes a program answering nothing over Base. It starts a fresh
+	// conversation rather than reading Model's.
 	Fallback Role
+	// Grounder, when set, finds the values a question's names stand for before any model is asked,
+	// in place of the pack's Grounder.
+	Grounder nl.Grounder
 	// Base evaluates a draft that checks, so an empty answer goes back to the model; without it a
 	// program that checks is accepted.
 	Base *datalog.Base
@@ -68,18 +72,17 @@ type Config struct {
 	Abstain  *nl.Abstain
 	Budget   nl.Budget
 	// Options, when set, edits the nl.Options Ask uses after everything above is filled in, for what
-	// Config doesn't name (a front end, a goal-only grammar, Eval options). What it sets wins, but
-	// for its Fallback, which Ask ignores: the fallback is Config.Fallback's role.
+	// Config doesn't name (a front end, a goal-only grammar, Eval options). What it sets wins.
 	Options func(*nl.Options)
 }
 
 // A Translator answers questions over one vocabulary and pack with the models a Config names. It is
 // safe for concurrent use as long as its providers are.
 type Translator struct {
-	v                   *ns.Vocabulary
-	opts                nl.Options
-	model, fallback     *role
-	nlModel, nlFallback nl.Model // the roles as nl.Models, for frontends/mcp's Options.Model
+	v               *ns.Vocabulary
+	opts            nl.Options
+	grounder        nl.Grounder
+	model, fallback *role
 }
 
 // New is a Translator over v and pack. It fails when cfg names no Model provider. pack may be nil.
@@ -87,21 +90,14 @@ func New(v *ns.Vocabulary, pack *nl.Pack, cfg Config) (*Translator, error) {
 	if cfg.Model.Provider == nil {
 		return nil, errors.New("translator: Config.Model needs a Provider")
 	}
-	t := &Translator{v: v, model: cfg.Model.runtime("model", ModelTemperature), nlModel: cfg.Model.build("model", ModelTemperature)}
+	t := &Translator{v: v, model: cfg.Model.runtime("model", ModelTemperature), grounder: cfg.Grounder}
 	o := nl.Options{Pack: pack, Base: cfg.Base, Actions: cfg.Actions, Vote: cfg.Vote, Escalate: cfg.Escalate, Abstain: cfg.Abstain, Budget: cfg.Budget}
 	if cfg.Fallback.Provider != nil {
 		t.fallback = cfg.Fallback.runtime("fallback", FallbackTemperature)
-		t.nlFallback = cfg.Fallback.build("fallback", FallbackTemperature)
 	}
 	if cfg.Options != nil {
 		cfg.Options(&o)
 	}
-	if o.Actions != nil {
-		a := *o.Actions
-		a.AsTools = true
-		o.Actions = &a
-	}
-	o.Fallback = nil // the fallback is the Translator's own Runner
 	t.opts = o
 	return t, nil
 }
@@ -111,65 +107,42 @@ func New(v *ns.Vocabulary, pack *nl.Pack, cfg Config) (*Translator, error) {
 // actions as tools, its vote as an agent.Consensus and its budget as the turn's. The Trace holds
 // every try, also when Ask fails, and Abstain turns what its policy covers into an *nl.Abstained.
 func (t *Translator) Ask(ctx context.Context, question string) (nl.Program, nl.Trace, error) {
-	p, tr, err := t.run(ctx, question)
-	return t.opts.Abstain.Judge(p, tr, err)
+	return t.Translate(ctx, question, t.opts, true, t.fallback != nil)
 }
 
-// Model is the first model with jaala's tuning applied, as an nl.Model, for a host handing it to
-// frontends/mcp's Options.Model.
-func (t *Translator) Model() nl.Model { return t.nlModel }
-
-// Fallback is the fallback as an nl.Model, nil when the Config names none.
-func (t *Translator) Fallback() nl.Model { return t.nlFallback }
-
-// build is r as an nl.Model, with the role's defaults where r leaves them.
-func (r Role) build(label string, temp float64) nl.Model {
-	if r.Label != "" {
-		label = r.Label
+// Translate is Ask under options o in place of the Config's, asking the model when model is set and
+// the fallback when fallback is, in that order. It is what frontends/mcp's ask tool calls
+// (mcp.Translator): the server writes o for each call (its Base, Eval options, pack, front end and
+// Abstain) and picks the models from the call's mode. The Config's roles and their tuning still
+// apply. Asking for a fallback the Config names none of asks the model alone, and asking for neither
+// fails.
+func (t *Translator) Translate(ctx context.Context, question string, o nl.Options, model, fallback bool) (nl.Program, nl.Trace, error) {
+	var roles []*role
+	if model {
+		roles = append(roles, t.model)
 	}
-	m := chakra.New(label, r.Provider)
-	switch {
-	case r.Temperature != nil:
-		t := *r.Temperature
-		m.Temperature = &t
-	default:
-		m.Temperature = &temp
+	if fallback && t.fallback != nil {
+		roles = append(roles, t.fallback)
 	}
-	switch {
-	case r.MaxTokens > 0:
-		m.MaxTokens = r.MaxTokens
-	case r.Thinking:
-		m.MaxTokens = ThinkingMaxTokens
+	if len(roles) == 0 {
+		return nl.Program{}, nl.Trace{}, errors.New("translator: Translate asked no model")
 	}
-	if r.Thinking {
-		line := r.ThinkPrompt
-		if line == "" {
-			line = DefaultThinkPrompt
-		}
-		return thinking{m, line}
+	if o.Actions != nil {
+		a := *o.Actions
+		a.AsTools = true
+		o.Actions = &a
 	}
-	return m
+	p, tr, err := t.run(ctx, question, o, roles)
+	return o.Abstain.Judge(p, tr, err)
 }
+
+// HasFallback says the Config names a Fallback.
+func (t *Translator) HasFallback() bool { return t.fallback != nil }
 
 // DefaultThinkPrompt is what a thinking model's prefix gains, unless its Role's ThinkPrompt replaces it.
 const DefaultThinkPrompt = `
 # Before you write the program, think it through: which things the question names and their ids, which relations connect them, which variables join them, and what the answer's columns are. Then write the program alone in a fenced block.
 `
-
-// thinking asks a reasoning model without the grammar and with think, and hands Translate only the
-// program, so each draft is still checked and its error fed back.
-type thinking struct {
-	nl.Model
-	prompt string // the line the prefix gains: Role.ThinkPrompt or DefaultThinkPrompt
-}
-
-func (t thinking) Complete(ctx context.Context, p nl.Prompt) (nl.Completion, error) {
-	p.Grammar = ""
-	p.Prefix += t.prompt
-	c, err := t.Model.Complete(ctx, p)
-	c.Text = programIn(c.Text)
-	return c, err
-}
 
 var (
 	thought = regexp.MustCompile(`(?s)<think>.*?</think>`)

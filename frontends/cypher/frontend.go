@@ -9,7 +9,7 @@ import (
 	"github.com/panyam/jaala/ns"
 )
 
-// NewFrontEnd is the nl.FrontEnd for a model writing Cypher over g (#354): nl.Translate with it shows
+// NewFrontEnd is the nl.FrontEnd for a model writing Cypher over g (#354): a translator with it shows
 // the model g in Cypher's terms and examples (questions with Cypher answering them), holds it to
 // Grammar(g), compiles each draft with Compile, and sends every refusal back as Explain writes it.
 // A construct a program can't express yet is refused as Try.Kind "gap", anything else Compile refuses

@@ -1,4 +1,4 @@
-package nl_test
+package translator_test
 
 import (
 	"context"
@@ -19,6 +19,8 @@ func abstained(t *testing.T, err error) *nl.Abstained {
 	return a
 }
 
+type failing struct{}
+
 // An answer whose vote agreed less than MinAgreement comes back as an abstention carrying it, also
 // when Escalate kept it because the fallback had nothing better. control: a unanimous vote answers,
 // and so does the disputed one without Abstain.
@@ -27,7 +29,7 @@ func TestAbstainOnADisputedAnswer(t *testing.T) {
 	disputed := []string{mit, apache, broken}
 	o := nl.Options{Base: b, Vote: &nl.Vote{Drafts: 3}, Abstain: &nl.Abstain{MinAgreement: 0.6}}
 
-	p, _, err := nl.Translate(context.Background(), mitQ, v, nil, model("small", disputed...), o)
+	p, _, err := translate(context.Background(), mitQ, v, nil, model("small", disputed...), o)
 	a := abstained(t, err)
 	if a.Reason != nl.AbstainLowAgreement || a.Draft.Text != mit || a.Draft.Confidence.Agreed != 1 || a.Draft.Confidence.Drawn != 3 || a.Err != nil {
 		t.Errorf("abstained %+v", a)
@@ -37,17 +39,17 @@ func TestAbstainOnADisputedAnswer(t *testing.T) {
 	}
 
 	esc := o
-	esc.Escalate, esc.Fallback = 0.6, model("big", "!fail")
-	_, tr, err := nl.Translate(context.Background(), mitQ, v, nil, model("small", disputed...), esc)
+	esc.Escalate = 0.6
+	_, tr, err := translate(context.Background(), mitQ, v, nil, model("small", disputed...), esc, model("big", "!fail"))
 	if a := abstained(t, err); a.Draft.Model != "small" || a.Draft.Text != mit || len(tr.Escalations) != 1 {
 		t.Errorf("escalated and kept: %+v, %d escalations", a, len(tr.Escalations))
 	}
 
-	if p, _, err := nl.Translate(context.Background(), mitQ, v, nil, model("small", mit, mitToo, mit), o); err != nil || p.Text != mit {
+	if p, _, err := translate(context.Background(), mitQ, v, nil, model("small", mit, mitToo, mit), o); err != nil || p.Text != mit {
 		t.Errorf("control: unanimous, %q %v", p.Text, err)
 	}
 	o.Abstain = nil
-	if p, _, err := nl.Translate(context.Background(), mitQ, v, nil, model("small", disputed...), o); err != nil || p.Text != mit {
+	if p, _, err := translate(context.Background(), mitQ, v, nil, model("small", disputed...), o); err != nil || p.Text != mit {
 		t.Errorf("control: without Abstain, %q %v", p.Text, err)
 	}
 }
@@ -67,7 +69,7 @@ func TestAbstainWhenNoDraftIsAccepted(t *testing.T) {
 		{"ran beats didn't check", []string{broken, empty, `nada(?p) => ?p`}, empty},
 		{"the later of equals", []string{empty, broken, empty2}, empty2},
 	} {
-		_, tr, err := nl.Translate(context.Background(), mitQ, v, nil, model("small", c.replies...), o)
+		_, tr, err := translate(context.Background(), mitQ, v, nil, model("small", c.replies...), o)
 		a := abstained(t, err)
 		if a.Reason != nl.AbstainNoAnswer || a.Draft.Text != c.best || a.Draft.Model != "small" || len(tr.Tries) != 3 {
 			t.Errorf("%s: %+v after %d tries", c.name, a, len(tr.Tries))
@@ -81,12 +83,12 @@ func TestAbstainWhenNoDraftIsAccepted(t *testing.T) {
 	}
 	judged := o
 	judged.Pack = &nl.Pack{Check: func(context.Context, nl.Program) error { return errors.New("not a list of packages") }}
-	_, _, err := nl.Translate(context.Background(), mitQ, v, nil, model("small", broken, mit, `nada(?p) => ?p`), judged)
+	_, _, err := translate(context.Background(), mitQ, v, nil, model("small", broken, mit, `nada(?p) => ?p`), judged)
 	if a := abstained(t, err); a.Draft.Text != mit || !strings.Contains(a.Diagnosis, "not a list of packages") {
 		t.Errorf("one the pack's Check refused beats one that didn't check: %+v", a)
 	}
 	o.Abstain = &nl.Abstain{MinAgreement: 0.6, Budget: true}
-	_, _, err = nl.Translate(context.Background(), mitQ, v, nil, model("small", broken, empty, broken), o)
+	_, _, err = translate(context.Background(), mitQ, v, nil, model("small", broken, empty, broken), o)
 	var a *nl.Abstained
 	if err == nil || errors.As(err, &a) {
 		t.Errorf("control: without NoAnswer, %v", err)
@@ -96,7 +98,7 @@ func TestAbstainWhenNoDraftIsAccepted(t *testing.T) {
 // A loop that ends on a repeated draft abstains as a repeat, offering the draft it repeated.
 func TestAbstainWhenTheModelRepeatsItself(t *testing.T) {
 	v, b := guide.Deps(t)
-	_, tr, err := nl.Translate(context.Background(), mitQ, v, nil, model("small", broken, broken), nl.Options{Base: b, Abstain: &nl.Abstain{NoAnswer: true}})
+	_, tr, err := translate(context.Background(), mitQ, v, nil, model("small", broken, broken), nl.Options{Base: b, Abstain: &nl.Abstain{NoAnswer: true}})
 	a := abstained(t, err)
 	if a.Reason != nl.AbstainRepeat || a.Draft.Text != broken || len(tr.Tries) != 2 || tr.Tries[1].Kind != nl.KindRepeat {
 		t.Errorf("%+v, kinds %v", a, kinds(tr))
@@ -109,23 +111,17 @@ func TestAbstainNeverCoversAFailure(t *testing.T) {
 	v, b := guide.Deps(t)
 	all := nl.Options{Base: b, Abstain: &nl.Abstain{MinAgreement: 0.6, NoAnswer: true, Budget: true}}
 	var a *nl.Abstained
-	if _, _, err := nl.Translate(context.Background(), mitQ, v, nil, model("small", broken, "!fail"), all); err == nil || errors.As(err, &a) {
+	if _, _, err := translate(context.Background(), mitQ, v, nil, model("small", broken, "!fail"), all); err == nil || errors.As(err, &a) {
 		t.Errorf("a model failing: %v", err)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if _, _, err := nl.Translate(ctx, mitQ, v, nil, model("small", mit), all); !errors.Is(err, context.Canceled) || errors.As(err, &a) {
+	if _, _, err := translate(ctx, mitQ, v, nil, model("small", mit), all); !errors.Is(err, context.Canceled) || errors.As(err, &a) {
 		t.Errorf("cancelled: %v", err)
 	}
-	if _, _, err := nl.Translate(context.Background(), mitQ, v, failing{}, model("small", mit), all); err == nil || errors.As(err, &a) {
+	if _, _, err := translate(context.Background(), mitQ, v, failing{}, model("small", mit), all); err == nil || errors.As(err, &a) {
 		t.Errorf("grounding: %v", err)
 	}
-}
-
-type failing struct{}
-
-func (failing) Ground(context.Context, string) ([]nl.Candidate, error) {
-	return nil, errors.New("index down")
 }
 
 // Budget abstains when Options.Budget runs out, still wrapping the BudgetSpent. control: without
@@ -134,14 +130,14 @@ func TestAbstainWhenTheBudgetRunsOut(t *testing.T) {
 	v, b := guide.Deps(t)
 	wrong, wrong2 := `pkg(?p, "mit") => ?p`, `pkg(?q, "mit") => ?q`
 	o := nl.Options{Base: b, MaxTries: 5, Budget: nl.Budget{Tokens: 250}, Abstain: &nl.Abstain{Budget: true}}
-	_, _, err := nl.Translate(context.Background(), mitQ, v, nil, model("small", wrong, wrong2, mit), o)
+	_, _, err := translate(context.Background(), mitQ, v, nil, model("small", wrong, wrong2, mit), o)
 	a := abstained(t, err)
 	var spent *nl.BudgetSpent
 	if a.Reason != nl.AbstainBudget || a.Draft.Text != wrong2 || !errors.As(err, &spent) {
 		t.Errorf("%+v", a)
 	}
 	o.Abstain = &nl.Abstain{NoAnswer: true}
-	if _, _, err := nl.Translate(context.Background(), mitQ, v, nil, model("small", wrong, wrong2, mit), o); !errors.As(err, &spent) || errors.As(err, &a) {
+	if _, _, err := translate(context.Background(), mitQ, v, nil, model("small", wrong, wrong2, mit), o); !errors.As(err, &spent) || errors.As(err, &a) {
 		t.Errorf("control: without Budget, %v", err)
 	}
 }
@@ -159,13 +155,17 @@ func TestEvalCountsAbstentionsApart(t *testing.T) {
 		i++
 		switch i {
 		case 1:
-			return nl.Translate(ctx, q, v, nil, model("small", broken, broken), nl.Options{Base: b, Abstain: &nl.Abstain{NoAnswer: true}})
+			return translate(ctx, q, v, nil, model("small", broken, broken), nl.Options{Base: b, Abstain: &nl.Abstain{NoAnswer: true}})
 		case 2:
-			return nl.Translate(ctx, q, v, nil, model("small", broken, mit), nl.Options{Base: b, Budget: nl.Budget{Tokens: 50}, Abstain: &nl.Abstain{Budget: true}})
+			return translate(ctx, q, v, nil, model("small", broken, mit), nl.Options{Base: b, Budget: nl.Budget{Tokens: 50}, Abstain: &nl.Abstain{Budget: true}})
 		}
-		return nl.Translate(ctx, q, v, nil, model("small", broken, broken), nl.Options{Base: b})
+		return translate(ctx, q, v, nil, model("small", broken, broken), nl.Options{Base: b})
 	})
 	if rep.Failures[nl.ClassAbstained] != 2 || rep.Failures[nl.ClassConstruct] != 1 || len(rep.Failures) != 2 {
 		t.Errorf("failures %v", rep.Failures)
 	}
+}
+
+func (failing) Ground(context.Context, string) ([]nl.Candidate, error) {
+	return nil, errors.New("index down")
 }

@@ -10,8 +10,7 @@ import (
 
 	agent "github.com/panyam/chakra"
 	"github.com/panyam/jaala/datalog"
-	"github.com/panyam/jaala/frontends/nl"
-	"github.com/panyam/jaala/frontends/nlmodels/chakra"
+	"github.com/panyam/jaala/frontends/nlmodels/translator"
 )
 
 // llamaServer stands in for llama.cpp's llama-server: it answers every chat
@@ -36,16 +35,22 @@ func llamaServer(program string) *httptest.Server {
 		}
 		fmt.Printf("%s %s: messages %s, grammar sent %v, cache_prompt %v, max_tokens %d\n",
 			r.Method, r.URL.Path, strings.Join(roles, "+"), req.Grammar != "", req.CachePrompt, req.MaxTokens)
-		json.NewEncoder(w).Encode(map[string]any{
-			"choices": []any{map[string]any{"message": map[string]string{"role": "assistant", "content": program}}},
-			"usage":   map[string]int{"prompt_tokens": 900, "completion_tokens": 12},
-		})
+		// streamed, as the translator asks: the program, then the usage
+		w.Header().Set("Content-Type", "text/event-stream")
+		for _, chunk := range []any{
+			map[string]any{"choices": []any{map[string]any{"delta": map[string]string{"content": program}, "finish_reason": "stop"}}},
+			map[string]any{"choices": []any{}, "usage": map[string]int{"prompt_tokens": 900, "completion_tokens": 12}},
+		} {
+			b, _ := json.Marshal(chunk)
+			fmt.Fprintf(w, "data: %s\n\n", b)
+		}
+		fmt.Fprint(w, "data: [DONE]\n\n")
 	}))
 }
 
-// chakra.New over chakra's llama.cpp preset is an nl.Model over a
-// llama-server already running: it sends the card as a cached system prefix
-// and the vocabulary's grammar with every question.
+// The translator over chakra's llama.cpp preset asks a llama-server already
+// running: it sends the card as a cached system prefix and the vocabulary's
+// grammar with every answer.
 func Example_llamaServer() {
 	srv := llamaServer(`imports("app", ?d) => ?d`)
 	defer srv.Close()
@@ -57,15 +62,20 @@ func Example_llamaServer() {
 	if err != nil {
 		panic(err)
 	}
-	m := chakra.New("llama.cpp", prov)
-	p, tr, err := nl.Translate(context.Background(), "what does app import?", v, nil, m,
-		nl.Options{Base: datalog.MustBase(v, source())})
+	t, err := translator.New(v, nil, translator.Config{
+		Model: translator.Role{Provider: prov, Label: "llama.cpp"},
+		Base:  datalog.MustBase(v, source()),
+	})
+	if err != nil {
+		panic(err)
+	}
+	p, tr, err := t.Ask(context.Background(), "what does app import?")
 	if err != nil {
 		fmt.Println(err)
 		return
 	}
-	t := tr.Tries[0]
-	fmt.Printf("%s wrote %s, %d tokens in, %d out\n", t.Model, p.Text, t.TokensIn, t.TokensOut)
+	try := tr.Tries[0]
+	fmt.Printf("%s wrote %s, %d tokens in, %d out\n", try.Model, p.Text, try.TokensIn, try.TokensOut)
 	fmt.Println("answer:", p.Rows[0].Bind["d"].S)
 	// Output:
 	// POST /v1/chat/completions: messages system+user, grammar sent true, cache_prompt true, max_tokens 512

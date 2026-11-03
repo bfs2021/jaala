@@ -8,10 +8,16 @@ import (
 	"github.com/panyam/jaala/datalog"
 	"github.com/panyam/jaala/frontends/mcp"
 	"github.com/panyam/jaala/frontends/nl"
+	"github.com/panyam/jaala/frontends/nlmodels/translator"
 	"github.com/panyam/mcpkit/client"
 	"github.com/panyam/mcpkit/core"
 	"github.com/panyam/mcpkit/server"
 )
+
+// The ask tool takes an mcp.Translator, and nlmodels' translator.Translator is
+// one: a host builds it with its models and hands it over as
+// mcp.Options{Translator: t}, so this module needs no model client.
+var _ mcp.Translator = (*translator.Translator)(nil)
 
 // depsPack is the server's pack: what the data is about and a worked
 // example, which its instructions and tool descriptions are written from,

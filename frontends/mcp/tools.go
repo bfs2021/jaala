@@ -451,16 +451,16 @@ type askInput struct {
 }
 
 func (c *call) ask(ctx core.ToolContext, in askInput) (core.ToolResult, error) {
-	model, fallback := c.o.Model, c.o.Fallback
+	model, fallback := true, true
 	switch in.Mode {
 	case "", "both":
 	case "local":
-		fallback = nil
+		fallback = false
 	case "frontier":
-		if fallback == nil {
+		if !c.o.Translator.HasFallback() {
 			return core.ErrorResult("this server has no frontier model; ask with mode local or both"), nil
 		}
-		model, fallback = fallback, nil
+		model = false
 	default:
 		return core.ErrorResult(fmt.Sprintf("mode %q: want local, frontier or both", in.Mode)), nil
 	}
@@ -483,9 +483,9 @@ func (c *call) ask(ctx core.ToolContext, in askInput) (core.ToolResult, error) {
 	if err != nil {
 		return core.ErrorResult(err.Error() + c.budgetHint(err)), nil
 	}
-	p, tr, err := nl.Translate(ctx, in.Question, c.v, nil, model, nl.Options{
-		Fallback: fallback, Base: b, Eval: c.evalOptions(in.MaxWork), Pack: &c.p.Pack, FrontEnd: fe, Abstain: c.o.Abstain,
-	})
+	p, tr, err := c.o.Translator.Translate(ctx, in.Question, nl.Options{
+		Base: b, Eval: c.evalOptions(in.MaxWork), Pack: &c.p.Pack, FrontEnd: fe, Abstain: c.o.Abstain,
+	}, model, fallback)
 	var ab *nl.Abstained
 	if errors.As(err, &ab) {
 		return core.TextResult(abstainedText(ab) + traceText(tr)), nil

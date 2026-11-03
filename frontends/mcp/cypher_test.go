@@ -77,6 +77,7 @@ func dialCode(t *testing.T, p mcp.Pack, o mcp.Options) *testutil.TestClient {
 	t.Helper()
 	v, b := code(t)
 	o.Base = func(context.Context) (*datalog.Base, error) { return b, nil }
+	withVocabulary(o, v)
 	srv, err := mcp.New(v, p, o)
 	if err != nil {
 		t.Fatal(err)
@@ -310,7 +311,7 @@ func TestAskTranslatesIntoCypher(t *testing.T) {
 	p.AskLanguage = "cypher"
 	p.CypherExamples = []nl.Example{{Question: "what does lex call?", Program: `MATCH (:Func {name: 'lex'})-[:CALLS]->(b:Func) RETURN b`}}
 	m := &prompted{reply: `MATCH (a:Func {name: 'main'})-[:CALLS]->(b:Func) RETURN b.name AS callee ORDER BY callee`}
-	c := dialCode(t, p, mcp.Options{Model: m})
+	c := dialCode(t, p, mcp.Options{Translator: translating(m)})
 	text := c.ToolCall("ask", map[string]any{"question": "what does main call?"})
 	for _, want := range []string{"cypher:\n  MATCH (a:Func", "ran: ", "columns: callee\n", "1. help\n", "2. parse\n", "1. small: accepted"} {
 		if !strings.Contains(text, want) {
@@ -329,7 +330,7 @@ func TestAskTranslatesIntoCypher(t *testing.T) {
 	}
 
 	plain := codePack(nil)
-	c = dialCode(t, plain, mcp.Options{Model: m})
+	c = dialCode(t, plain, mcp.Options{Translator: translating(m)})
 	if res := call(t, c, "ask", map[string]any{"question": "what does main call?", "language": "cypher"}); !res.IsError || !strings.Contains(res.Content[0].Text, "no Cypher graph") {
 		t.Errorf("a pack without a graph translated into Cypher: %+v", res.Content)
 	}

@@ -1,4 +1,4 @@
-package cypher_test
+package cypherarm_test
 
 import (
 	"context"
@@ -10,26 +10,12 @@ import (
 	"github.com/panyam/jaala/datalog"
 	"github.com/panyam/jaala/frontends/cypher"
 	"github.com/panyam/jaala/frontends/nl"
+	"github.com/panyam/jaala/frontends/nlmodels/internal/modeltest"
 	"github.com/panyam/jaala/internal/guide"
 	"github.com/panyam/jaala/ns"
 )
 
 var update = flag.Bool("update", false, "rewrite testdata/eval.golden")
-
-// drafts are the Cypher a scripted model writes for the guide's questions (guide.Cases), the ones
-// frontends/nl's TestEval asks in jaala's syntax, in the order it writes them: a right query for each,
-// after a misspelled label for "transitive", which the refusal's did-you-mean fixes, and for "missing",
-// the property the graph doesn't have, which Compile refuses and the model writes again.
-var drafts = map[string][]string{
-	"what does app import directly?":            {`MATCH (:Package {name: 'app'})-[:IMPORTS]->(d) RETURN d.name`},
-	"what does app depend on, directly or not?": {`MATCH (:Pakage {name: 'app'})-[:IMPORTS*]->(d) RETURN DISTINCT d.name`, `MATCH (:Package {name: 'app'})-[:IMPORTS*]->(d) RETURN DISTINCT d.name`},
-	"what license does util have?":              {`MATCH (p:Package {name: 'util'}) RETURN p.license`},
-	"which packages have no license stated?":    {`MATCH (p:Package) WHERE p.license IS NULL RETURN p.name`},
-	"how many packages does app depend on?":     {`MATCH (:Package {name: 'app'})-[:IMPORTS*]->(d) RETURN count(DISTINCT d)`},
-	"what imports util?":                        {`MATCH (x:Package)-[:IMPORTS]->(:Package {name: 'util'}) RETURN x.name`},
-	"list every package with its license":       {`MATCH (p:Package) RETURN p.name, p.license`},
-	"who maintains api?":                        {`MATCH (p:Package {name: 'api'}) RETURN p.maintainer`, `MATCH (p:Package {name: 'api'}) RETURN p.maintainer`},
-}
 
 // scripted answers each question with its drafts in turn, as a model reading each refusal would.
 type scripted struct{}
@@ -37,15 +23,15 @@ type scripted struct{}
 func (scripted) Name() string { return "scripted" }
 
 func (scripted) Complete(_ context.Context, p nl.Prompt) (nl.Completion, error) {
-	ds := drafts[p.Turns[0].Text]
+	ds := guide.CypherDrafts[p.Turns[0].Text]
 	return nl.Completion{Text: ds[min(len(p.Turns)/2, len(ds)-1)]}, nil // a refused draft adds two turns
 }
 
-// translate is nl.Translate with the Cypher front end over the guide's graph, running each draft over b.
+// translate is the translator (modeltest.Translate) with the Cypher front end over the guide's graph, running each draft over b.
 func translate(v *ns.Vocabulary, b *datalog.Base) func(context.Context, string) (nl.Program, nl.Trace, error) {
 	fe := cypher.NewFrontEnd(depsGraph, nl.Example{Question: "what does api import?", Program: `MATCH (:Package {name: 'api'})-[:IMPORTS]->(d) RETURN d.name`})
 	return func(ctx context.Context, q string) (nl.Program, nl.Trace, error) {
-		return nl.Translate(ctx, q, v, nil, scripted{}, nl.Options{Base: b, FrontEnd: fe})
+		return modeltest.Translate(ctx, q, v, nil, scripted{}, nl.Options{Base: b, FrontEnd: fe})
 	}
 }
 
@@ -116,12 +102,12 @@ func TestTheTranslatorTakesAConstantColumnAndTellsATestToMoveToWhere(t *testing.
 			`MATCH (:Package {name: 'log'})-[:IMPORTS]->(d) WHERE d.name IN ['util'] RETURN d.name`,
 		},
 	}, &sent}
-	_, tr, err := nl.Translate(context.Background(), "is app a package?", v, nil, model, nl.Options{Base: b, FrontEnd: fe})
+	_, tr, err := modeltest.Translate(context.Background(), "is app a package?", v, nil, model, nl.Options{Base: b, FrontEnd: fe})
 	if err != nil || len(tr.Tries) != 1 || tr.Tries[0].Err != nil {
 		t.Errorf("a constant column: %v, %d tries, first refused as %v; want it taken on the first", err, len(tr.Tries), tr.Tries[0].Err)
 	}
 	sent = nil
-	_, tr, err = nl.Translate(context.Background(), "does log import util?", v, nil, model, nl.Options{Base: b, FrontEnd: fe})
+	_, tr, err = modeltest.Translate(context.Background(), "does log import util?", v, nil, model, nl.Options{Base: b, FrontEnd: fe})
 	if err != nil || len(tr.Tries) != 2 || tr.Tries[0].Kind != "compile" || tr.Tries[1].Err != nil {
 		t.Fatalf("IN returned as a value: %v, %d tries; want a compile refusal and then an answer", err, len(tr.Tries))
 	}

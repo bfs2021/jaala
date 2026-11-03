@@ -9,6 +9,7 @@ import (
 	"github.com/panyam/jaala/datalog"
 	"github.com/panyam/jaala/frontends/cypher"
 	"github.com/panyam/jaala/frontends/nl"
+	"github.com/panyam/jaala/frontends/nlmodels/translator"
 	"github.com/panyam/jaala/ns"
 )
 
@@ -296,25 +297,32 @@ func Example_cypherDerived() {
 	// "f:main" | "main"
 }
 
-// With the Cypher front end, Translate asks a model for Cypher: the prompt
-// is the graph and Cypher's instructions, each draft is compiled before it
-// is checked, and a refusal goes back in Cypher's terms.
+// With the Cypher front end, the translator asks a model for Cypher: the
+// prompt is the graph and Cypher's instructions, each draft is compiled
+// before it is checked, and a refusal goes back in Cypher's terms.
 func Example_cypherTranslate() {
 	v, err := vocabulary(source())
 	if err != nil {
 		panic(err)
 	}
-	m := &scriptedModel{drafts: []string{
+	model := scripted(
 		`MATCH (:Pakage {name: 'app'})-[:IMPORTS*]->(d) RETURN d.name`,
 		`MATCH (:Package {name: 'app'})-[:IMPORTS*]->(d) RETURN d.name`,
-	}}
-	fe := cypher.NewFrontEnd(depsGraph)
-	p, tr, err := nl.Translate(context.Background(), "what does app depend on?", v, nil, m,
-		nl.Options{Base: datalog.MustBase(v, source()), FrontEnd: fe})
+	)
+	t, err := translator.New(v, nil, translator.Config{
+		Model:   translator.Role{Provider: model},
+		Base:    datalog.MustBase(v, source()),
+		Options: func(o *nl.Options) { o.FrontEnd = cypher.NewFrontEnd(depsGraph) },
+	})
+	if err != nil {
+		panic(err)
+	}
+	p, tr, err := t.Ask(context.Background(), "what does app depend on?")
 	if err != nil {
 		fmt.Println(err)
 		return
 	}
+	told(model)
 	for _, t := range tr.Tries {
 		fmt.Printf("try in %s: %q\n", t.Language, t.Kind)
 	}

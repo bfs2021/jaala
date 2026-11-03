@@ -12,15 +12,15 @@ import (
 	"github.com/panyam/jaala/ns"
 )
 
-// Actions turn Translate into a loop (#393): before answering, a model may look at the data, with
-// replies a small model can write under a grammar, and each one's result comes back to it as the
-// next turn. A reply is one of
+// Actions let a model look at the data before it answers (#393), and each one's result comes back to
+// it. The translator offers them as tools (AsTools); a loop reading them from the reply, which a small
+// model can write under a grammar, takes a reply that is one of
 //
 //	look NAME       a member's signature and doc, or a module's members (a label's, in Cypher)
 //	values TARGET   up to Sample of the values an argument holds (pkg.license; Package.license)
 //	try             on its first line, then a draft: run with Sample rows at most, its rows or why
 //	                it answered none sent back
-//	find NAME       the values a name may stand for, from the Grounder, when Translate has one
+//	find NAME       the values a name may stand for, from the Grounder, when there is one
 //
 // and any other reply is the answer, judged as a draft always is. The loop doesn't read the drafts'
 // language: try runs a draft through the front end as an answer is, and a front end that is a Prober
@@ -37,8 +37,7 @@ type Actions struct {
 	Compact bool
 	// AsTools says the caller offers the actions as tools of its own (Session.Tools), as nlmodels'
 	// translator does on a chakra Runner (#496), rather than reading them from a reply: the prefix
-	// leaves out Prompts.Actions, and ActionGrammar is Grammar. Translate offers no tools, so under it
-	// a model then takes no actions.
+	// leaves out Prompts.Actions, and ActionGrammar is Grammar.
 	AsTools bool
 }
 
@@ -119,7 +118,7 @@ const actionInstructions = `
 %s# Any other reply is your answer.
 `
 
-// findInstruction is actionInstructions' line for find, when Translate has a Grounder.
+// findInstruction is actionInstructions' line for find, when there is a Grounder.
 const findInstruction = "#   find NAME       the ids or values a name from the question may stand for\n"
 
 // act runs a reply's action and writes what goes back to the model, with the text values it saw the
@@ -210,7 +209,7 @@ func quotedValue(v ns.Value) string {
 	return strconv.Quote(v.S)
 }
 
-// Look is the look action outside Translate, for a tool an agent calls (frontends/mcp, #393): name
+// Look is the look action outside a translation, for a tool an agent calls (frontends/mcp, #393): name
 // described in fe's terms when fe is a Prober, and otherwise as jaala's card describes it, whole. fe
 // may be nil.
 func Look(v *ns.Vocabulary, fe FrontEnd, name string) (string, error) {
@@ -220,7 +219,7 @@ func Look(v *ns.Vocabulary, fe FrontEnd, name string) (string, error) {
 	return look(v, name)
 }
 
-// Probe is the values action's draft outside Translate: a program, in fe's language when fe is a
+// Probe is the values action's draft outside a translation: a program, in fe's language when fe is a
 // Prober and jaala's otherwise, answering up to limit of target's distinct values. fe may be nil.
 func Probe(v *ns.Vocabulary, fe FrontEnd, target string, limit int) (string, error) {
 	if p, ok := fe.(Prober); ok {

@@ -7,8 +7,8 @@
 // New builds the server with its tools: query (a program in, rows with the facts they were derived
 // from out, or with sample a try on a few rows), schema (the vocabulary card, a module's or
 // relation's members and docs, and the pack's data card), explain (where a program's work went, and
-// why its answer is empty), look, values and find (nl.Translate's actions, #393; find only with the
-// pack's Grounder), ask (plain language through nl.Translate, when a model is configured) and cypher
+// why its answer is empty), look, values and find (the translator's actions, #393; find only with the
+// pack's Grounder), ask (plain language through a Translator, when one is configured) and cypher
 // (with the pack's graph). A host registers its own tools on the
 // server New returns, and writes answers its own way through Pack.Format. NewWith adds a host's own
 // arguments to every tool, and a hook that decides per call what they mean (#357).
@@ -31,7 +31,7 @@ import (
 )
 
 // A Pack is a host's domain as its MCP server presents it: nl.Pack's About, Card, Examples, Grounder
-// and Check, which the ask tool hands to nl.Translate and the instructions are written from, plus
+// and Check, which the ask tool hands to its Translator and the instructions are written from, plus
 // what only a server needs.
 type Pack struct {
 	nl.Pack
@@ -71,14 +71,27 @@ type Pack struct {
 	CypherExamples []nl.Example
 }
 
+// A Translator turns a question into a program, for the ask tool: nlmodels' translator.Translator,
+// or a host's own. Translate runs one question under o, which the server writes for each call (its
+// Base, Eval options, pack, front end and Abstain), asking the first model when model is set and
+// the fallback after it when fallback is. It returns what a translation returns: the accepted
+// program, the trace of every try, and an *nl.Abstained when o.Abstain covers the outcome.
+type Translator interface {
+	Translate(ctx context.Context, question string, o nl.Options, model, fallback bool) (nl.Program, nl.Trace, error)
+	// HasFallback says there is a fallback model, which the ask tool's frontier mode needs.
+	HasFallback() bool
+}
+
 // Options configure New.
 type Options struct {
 	// Base is the Base a call evaluates over, asked once per call, so a host can pick a workspace or
 	// a store per caller. Required.
 	Base func(ctx context.Context) (*datalog.Base, error)
-	// Model, when set, offers the ask tool, which translates through it, and Fallback is the model
-	// asked after it (nl.Options.Fallback). The ask tool's mode picks either alone.
-	Model, Fallback nl.Model
+	// Translator, when set, offers the ask tool, which translates through it (#496): nlmodels'
+	// translator.Translator is one, so a host builds it with its models and their tuning and hands it
+	// over, and this module stays free of any model client. The ask tool's mode picks the model, its
+	// fallback, or both in turn.
+	Translator Translator
 	// Abstain, when set, is the ask tool's nl.Options.Abstain (#482): a question it abstains on is
 	// answered "not confident", with the reason and the closest draft for the caller to finish, as
 	// an ordinary answer rather than a tool error. A model that fails is still a tool error.
@@ -209,7 +222,7 @@ func NewWith[A any](v *ns.Vocabulary, p Pack, o Options, x Extension[A]) (*serve
 	}
 	text := p.Instructions
 	if text == "" {
-		text = instructions(p, o.Model != nil)
+		text = instructions(p, o.Translator != nil)
 	}
 	host, err := objectOf(core.GenerateSchema[A]())
 	if err != nil {
@@ -245,7 +258,7 @@ func NewWith[A any](v *ns.Vocabulary, p Pack, o Options, x Extension[A]) (*serve
 	if p.Grounder != nil {
 		srv.Register(find)
 	}
-	if o.Model != nil {
+	if o.Translator != nil {
 		srv.Register(ask)
 	}
 	if p.Cypher != nil {

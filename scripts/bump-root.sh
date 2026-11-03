@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Points every sub-module at version V, the one `make tag-push` is about to tag, before tagging (after
 # mcpkit's scripts/bump-root.sh and bump-pins.sh): its require of jaala, and of every other module in
-# SUB_MODS_TO_TAG it requires (cypher and nlmodels require frontends/nl, mcp requires cypher, and nl
+# SUB_MODS_TO_TAG it requires (cypher and nlmodels require frontends/nl, nlmodels cypher for its
+# tests, mcp requires cypher, and nl
 # through it), directly or not. Each such require gets a replace by the checkout, so tidy resolves
 # them locally and never needs V to be published; a consumer ignores replace and reads the requires,
 # which name V once the tags are pushed. All of them are tagged at one commit in one `make tag-push`.

@@ -5,7 +5,7 @@
 //
 // Card lists a vocabulary compactly enough to sit in a model's prompt as a cached prefix. Explain
 // turns an error from Parse, Validate or Eval into text a model can fix the program from: the
-// message, where in the program it points, and the fix when the engine knows one. Translate is the
+// message, where in the program it points, and the fix when the engine knows one. The translator is the
 // loop around them (#325): it asks a host's Model for a program, checks it, feeds each error back
 // through Explain, and falls back to a second model, recording every try in a Trace. Eval scores a
 // translator over questions with known answers (#326): pass rate on the first try and after retries,
