@@ -21,7 +21,7 @@ import (
 //
 // The drafts differ only if the model samples: each is asked with Prompt.Draw set, and a Model
 // decoding greedily (temperature 0) writes the same draft every time, so its vote agrees by
-// construction. nlmodels' clients seed by Draw.
+// construction. nlmodels' chakra Model seeds by Draw, for a provider that takes a seed.
 type Vote struct {
 	// Drafts is how many answers are drawn in all, the first included; 3 when 0.
 	Drafts int

@@ -8,9 +8,10 @@ import (
 	"net/http/httptest"
 	"strings"
 
+	agent "github.com/panyam/chakra"
 	"github.com/panyam/jaala/datalog"
 	"github.com/panyam/jaala/frontends/nl"
-	"github.com/panyam/jaala/frontends/nlmodels/llamacpp"
+	"github.com/panyam/jaala/frontends/nlmodels/chakra"
 )
 
 // llamaServer stands in for llama.cpp's llama-server: it answers every chat
@@ -42,9 +43,9 @@ func llamaServer(program string) *httptest.Server {
 	}))
 }
 
-// llamacpp.New is an nl.Model over a llama-server already running: it sends
-// the card as a cached system prefix and the vocabulary's grammar with every
-// question.
+// chakra.New over chakra's llama.cpp preset is an nl.Model over a
+// llama-server already running: it sends the card as a cached system prefix
+// and the vocabulary's grammar with every question.
 func Example_llamaServer() {
 	srv := llamaServer(`imports("app", ?d) => ?d`)
 	defer srv.Close()
@@ -52,7 +53,11 @@ func Example_llamaServer() {
 	if err != nil {
 		panic(err)
 	}
-	m := llamacpp.New(srv.URL)
+	prov, err := agent.NewLlamaCppProvider(agent.LlamaCppConfig{BaseURL: srv.URL + "/v1"})
+	if err != nil {
+		panic(err)
+	}
+	m := chakra.New("llama.cpp", prov)
 	p, tr, err := nl.Translate(context.Background(), "what does app import?", v, nil, m,
 		nl.Options{Base: datalog.MustBase(v, source())})
 	if err != nil {

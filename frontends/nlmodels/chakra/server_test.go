@@ -1,12 +1,12 @@
-package llamacpp
+package chakra
 
 import (
 	"context"
-	"encoding/json"
 	"os"
 	"strings"
 	"testing"
 
+	agent "github.com/panyam/chakra"
 	"github.com/panyam/jaala/datalog"
 	"github.com/panyam/jaala/frontends/nl"
 	"github.com/panyam/jaala/internal/gbnf"
@@ -19,7 +19,7 @@ import (
 // what's tested; ./selfcheck.sh runs it on that one when `make llama` has fetched it:
 //
 //	llama-server -m ~/.cache/jaala/stories260K.gguf --port 18089 --chat-template chatml
-//	JAALA_LLAMACPP_URL=http://127.0.0.1:18089 go test ./llamacpp -run RealServer -v
+//	JAALA_LLAMACPP_URL=http://127.0.0.1:18089 go test ./chakra -run RealServer -v
 //
 // Every reply has to stay inside the grammar as nl's recognizer reads it, token by token. The test
 // model writes nonsense into a string and rarely closes it, so its replies end at MaxTokens and are
@@ -49,21 +49,22 @@ func TestARealServerKeepsTheModelToTheGrammar(t *testing.T) {
 		t.Fatal(err)
 	}
 	ctx := context.Background()
-	c := New(url)
+	c := llama(t, url)
+	prov := c.Provider // asked directly for its finish reason
+	temp := 1.2
 	stopped := 0
 	for i := 0; i < 24; i++ {
-		req := request{Messages: []message{{"system", "Write a program."}, {"user", "what calls what?"}}, Grammar: text,
-			CachePrompt: true, MaxTokens: 160, Temperature: 1.2}
-		body, _ := json.Marshal(req)
-		var res response
-		if err := post(ctx, c.HTTP, c.URL+"/v1/chat/completions", body, &res); err != nil {
+		res, err := prov.Generate(ctx, agent.ProviderRequest{Instructions: "Write a program.",
+			Messages: []agent.Message{{Role: agent.RoleUser, Text: "what calls what?"}}, Guided: &agent.GuidedDecoding{Grammar: text},
+			MaxTokens: 160, Temperature: &temp})
+		if err != nil {
 			t.Fatalf("the server refused the grammar: %v", err)
 		}
-		reply := res.Choices[0].Message.Content
+		reply := res.Text
 		if !ours.AcceptsPrefix(reply) {
 			t.Errorf("the reply leaves the grammar as nl reads it: %q", reply)
 		}
-		if res.Choices[0].FinishReason != "stop" {
+		if res.FinishReason != "stop" {
 			continue // cut off at MaxTokens: a prefix, checked above
 		}
 		stopped++

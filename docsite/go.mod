@@ -34,6 +34,7 @@ require (
 )
 
 require (
+	github.com/panyam/chakra v0.2.2
 	github.com/panyam/jaala v0.1.89
 	github.com/panyam/jaala/frontends/cypher v0.1.89
 	github.com/panyam/jaala/frontends/mcp v0.1.89
