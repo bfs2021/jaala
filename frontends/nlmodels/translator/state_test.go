@@ -1,4 +1,4 @@
-package nl_test
+package translator_test
 
 import (
 	"context"
@@ -12,33 +12,6 @@ import (
 	"github.com/panyam/jaala/stdlib"
 )
 
-// A draft guessing a spelling of a value the conversation has seen is repaired by the harness and
-// accepted, recorded as a try of its own after the model's. control: when the conversation saw no
-// values, the same draft goes back to the model as before.
-func TestARepairFixesASpellingTheConversationSaw(t *testing.T) {
-	v, b := guide.Deps(t)
-	guess := `pkg(?p, "mit") => ?p`
-	o := nl.Options{Base: b, Actions: &nl.Actions{}}
-	p, tr, err := nl.Translate(context.Background(), mitQ, v, nil, model("small", "values pkg.license", guess), o)
-	if err != nil || p.Text != mit || len(p.Rows) != 1 {
-		t.Fatalf("Translate = %q %v", p.Text, err)
-	}
-	if len(tr.Tries) != 2 || tr.Tries[0].Kind != nl.KindEmpty || tr.Tries[1].Repair != `"mit" to "MIT"` || tr.Tries[1].Err != nil {
-		t.Errorf("tries %+v", tr.Tries)
-	}
-	rep := nl.Eval(context.Background(), []nl.Case{{Name: "mit", Question: mitQ, Want: [][]string{{"app"}}}}, b,
-		func(ctx context.Context, q string) (nl.Program, nl.Trace, error) {
-			return nl.Translate(ctx, q, v, nil, model("small", "values pkg.license", guess), o)
-		})
-	if rep.Passed != 1 || rep.Repairs != 1 {
-		t.Errorf("report: passed %d, repairs %d", rep.Passed, rep.Repairs)
-	}
-	_, tr, err = nl.Translate(context.Background(), mitQ, v, nil, model("small", guess), o)
-	if err == nil || repaired(tr) {
-		t.Errorf("control: nothing seen, %v %+v", err, tr.Tries)
-	}
-}
-
 // repaired reports whether any try in tr is one the harness repaired.
 func repaired(tr nl.Trace) bool {
 	for _, try := range tr.Tries {
@@ -47,6 +20,33 @@ func repaired(tr nl.Trace) bool {
 		}
 	}
 	return false
+}
+
+// A draft guessing a spelling of a value the conversation has seen is repaired by the harness and
+// accepted, recorded as a try of its own after the model's. control: when the conversation saw no
+// values, the same draft goes back to the model as before.
+func TestARepairFixesASpellingTheConversationSaw(t *testing.T) {
+	v, b := guide.Deps(t)
+	guess := `pkg(?p, "mit") => ?p`
+	o := nl.Options{Base: b, Actions: &nl.Actions{}}
+	p, tr, err := translate(context.Background(), mitQ, v, nil, model("small", "values pkg.license", guess), o)
+	if err != nil || p.Text != mit || len(p.Rows) != 1 {
+		t.Fatalf("Translate = %q %v", p.Text, err)
+	}
+	if len(tr.Tries) != 2 || tr.Tries[0].Kind != nl.KindEmpty || tr.Tries[1].Repair != `"mit" to "MIT"` || tr.Tries[1].Err != nil {
+		t.Errorf("tries %+v", tr.Tries)
+	}
+	rep := nl.Eval(context.Background(), []nl.Case{{Name: "mit", Question: mitQ, Want: [][]string{{"app"}}}}, b,
+		func(ctx context.Context, q string) (nl.Program, nl.Trace, error) {
+			return translate(ctx, q, v, nil, model("small", "values pkg.license", guess), o)
+		})
+	if rep.Passed != 1 || rep.Repairs != 1 {
+		t.Errorf("report: passed %d, repairs %d", rep.Passed, rep.Repairs)
+	}
+	_, tr, err = translate(context.Background(), mitQ, v, nil, model("small", guess), o)
+	if err == nil || repaired(tr) {
+		t.Errorf("control: nothing seen, %v %+v", err, tr.Tries)
+	}
 }
 
 // A value a closed Domain refuses is repaired from the Domain, which the check names, though the
@@ -65,11 +65,11 @@ func TestARepairFixesASpellingTheDomainNames(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	p, tr, err := nl.Translate(context.Background(), "which functions are there?", v, nil, model("small", `node(?n, "Func") => ?n`), nl.Options{Base: b, Actions: &nl.Actions{}})
+	p, tr, err := translate(context.Background(), "which functions are there?", v, nil, model("small", `node(?n, "Func") => ?n`), nl.Options{Base: b, Actions: &nl.Actions{}})
 	if err != nil || p.Text != `node(?n, "func") => ?n` || len(tr.Tries) != 2 || tr.Tries[1].Repair != `"Func" to "func"` {
 		t.Errorf("%q %v, tries %+v", p.Text, err, tr.Tries)
 	}
-	if _, tr, err := nl.Translate(context.Background(), "which functions are there?", v, nil, model("small", `node(?n, "Func") => ?n`), nl.Options{Base: b}); err == nil || repaired(tr) {
+	if _, tr, err := translate(context.Background(), "which functions are there?", v, nil, model("small", `node(?n, "Func") => ?n`), nl.Options{Base: b}); err == nil || repaired(tr) {
 		t.Errorf("control: without Actions, nothing is repaired: %v %+v", err, tr.Tries)
 	}
 }
@@ -80,7 +80,7 @@ func TestCompactSendsWhatWasFoundInPlaceOfTheConversation(t *testing.T) {
 	v, b := guide.Deps(t)
 	replies := []string{"values pkg.license", "look pkg", `pkg(?p, "nope") => ?p`, mit}
 	m := model("small", replies...)
-	p, _, err := nl.Translate(context.Background(), mitQ, v, nil, m, nl.Options{Base: b, Actions: &nl.Actions{Compact: true}})
+	p, _, err := translate(context.Background(), mitQ, v, nil, m, nl.Options{Base: b, Actions: &nl.Actions{Compact: true}})
 	if err != nil || p.Text != mit {
 		t.Fatalf("Translate = %q %v", p.Text, err)
 	}
@@ -99,7 +99,7 @@ func TestCompactSendsWhatWasFoundInPlaceOfTheConversation(t *testing.T) {
 		t.Errorf("the first turn = %q, want the question alone", m.asked[0].Turns[0].Text)
 	}
 	plain := model("small", replies...)
-	if _, _, err := nl.Translate(context.Background(), mitQ, v, nil, plain, nl.Options{Base: b, Actions: &nl.Actions{}}); err != nil || len(plain.asked[3].Turns) != 7 {
+	if _, _, err := translate(context.Background(), mitQ, v, nil, plain, nl.Options{Base: b, Actions: &nl.Actions{}}); err != nil || len(plain.asked[3].Turns) != 7 {
 		t.Errorf("control: the conversation's last ask sent %d turns: %v", len(plain.asked[3].Turns), err)
 	}
 }
@@ -110,7 +110,7 @@ func TestAFailedRepairLeavesTheModelsDraft(t *testing.T) {
 	v, b := guide.Deps(t)
 	guess := `pkg(?p, "mit"), pkg(?p, "nope") => ?p`
 	m := model("small", "values pkg.license", guess, mit)
-	p, tr, err := nl.Translate(context.Background(), mitQ, v, nil, m, nl.Options{Base: b, Actions: &nl.Actions{}})
+	p, tr, err := translate(context.Background(), mitQ, v, nil, m, nl.Options{Base: b, Actions: &nl.Actions{}})
 	if err != nil || p.Text != mit || len(tr.Tries) != 2 || tr.Tries[0].Text != guess || repaired(tr) {
 		t.Fatalf("%q %v, tries %+v", p.Text, err, tr.Tries)
 	}
@@ -123,7 +123,7 @@ func TestAFailedRepairLeavesTheModelsDraft(t *testing.T) {
 func TestACompactFallbackStartsFresh(t *testing.T) {
 	v, b := guide.Deps(t)
 	big := model("big", mit)
-	_, _, err := nl.Translate(context.Background(), mitQ, v, nil, model("small", "values pkg.license", `pkg(?p, "nope") => ?p`), nl.Options{Base: b, Actions: &nl.Actions{Compact: true}, Fallback: big})
+	_, _, err := translate(context.Background(), mitQ, v, nil, model("small", "values pkg.license", `pkg(?p, "nope") => ?p`), nl.Options{Base: b, Actions: &nl.Actions{Compact: true}}, big)
 	if err != nil || len(big.asked) != 1 || strings.Contains(big.asked[0].Turns[0].Text, "found so far") {
 		t.Errorf("%v: the fallback's first turn:\n%s", err, big.asked[0].Turns[0].Text)
 	}

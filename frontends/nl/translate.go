@@ -11,10 +11,11 @@ import (
 	"github.com/panyam/jaala/ns"
 )
 
-// A Model writes text from a prompt (#325). nl runs no model: a host wraps whichever it uses, a local
-// one through a client such as nlmodels' (#330) or a hosted one through its SDK, and Translate calls it once
-// per try. Complete must honour ctx's cancellation. An error fails that try and moves Translate on to
-// the fallback model, since retrying the same call rarely helps.
+// A Model writes text from a prompt (#325), for Extract, which asks one once per try. nl runs no
+// model: a host wraps whichever it uses, a local one through nlmodels' chakra package (#330) or a
+// hosted one through its SDK. The translator asks chakra Providers instead (nlmodels/translator,
+// #496). Complete must honour ctx's cancellation. An error fails that try and moves on to the
+// fallback model, since retrying the same call rarely helps.
 type Model interface {
 	// Name says which model answered, for the Trace and Program.Model.
 	Name() string
@@ -63,7 +64,7 @@ type Completion struct {
 
 // A Grounder finds the values a question's names stand for (#325), the way Declaire's name.find turns
 // a short name into ranked ids, so a model is handed real values instead of spelling them. It is the
-// host's: nl can't tell which words of a question are names. An error fails Translate.
+// host's: nl can't tell which words of a question are names. An error fails the translator.
 type Grounder interface {
 	Ground(ctx context.Context, question string) ([]Candidate, error)
 }
@@ -74,14 +75,10 @@ type Candidate struct {
 	Values []string
 }
 
-// Options tune Translate. The zero value tries the model three times and only checks the program.
+// Options tune the translator. The zero value tries the model three times and only checks the program.
 type Options struct {
 	// MaxTries is how many drafts each model gets; 3 when 0.
 	MaxTries int
-	// Fallback, when set, is asked once Model runs out of tries, repeats a draft it was told was wrong,
-	// or writes a program that checks and answers nothing over Base. It starts a fresh conversation
-	// rather than reading Model's drafts.
-	Fallback Model
 	// Base, when set, evaluates a program that checks. An evaluation error is fed back as a check
 	// error is, and an empty answer goes to Fallback, or back to the model when no fallback is left.
 	// Without it, a program that checks is accepted.
@@ -93,8 +90,8 @@ type Options struct {
 	Grammar   string
 	NoGrammar bool
 	// Pack, when set, is the host's domain (#344): its part of the prefix follows the card, its
-	// examples are checked before any model is asked, its Grounder grounds the question when
-	// Translate's is nil, and its Check judges each answer.
+	// examples are checked before any model is asked, its Grounder grounds the question when the
+	// translator has none, and its Check judges each answer.
 	Pack *Pack
 	// FrontEnd, when set, is the language the model writes in place of jaala's (#354): the prompt is
 	// its card, instructions and examples (the pack's About and Card still follow, its jaala examples
@@ -109,19 +106,19 @@ type Options struct {
 	Vote *Vote
 	// Escalate, when above 0, moves an answer whose drafts agree less than this share
 	// (Confidence.Agreement) on to Fallback, recorded in Trace.Escalations. When the fallback answers
-	// nothing better, Translate returns the first such answer rather than failing. It needs a Vote:
+	// nothing better, the translator returns the first such answer rather than failing. It needs a Vote:
 	// without one every answer agrees with itself.
 	Escalate float64
-	// Budget caps the tokens and time Translate spends on the question.
+	// Budget caps the tokens and time the translator spends on the question.
 	Budget Budget
-	// Abstain, when set, says when Translate returns an *Abstained, "not confident" with the closest
+	// Abstain, when set, says when the translator returns an *Abstained, "not confident" with the closest
 	// draft, in place of an answer its vote disputes or a failure to answer (#482). Off by default.
 	Abstain *Abstain
 
 	grounder Grounder // the Grounder a find action asks
 }
 
-// A Program is what Translate accepted: its text, as the model wrote it less any Markdown fence, the
+// A Program is what the translator accepted: its text, as the model wrote it less any Markdown fence, the
 // parsed Query, its rows when Options.Base evaluated it, and the model that wrote it.
 type Program struct {
 	Text  string
@@ -131,11 +128,11 @@ type Program struct {
 	// Language is the front end's the model wrote Text in, "" for jaala's, and Compiled the jaala
 	// program Text compiled to, which Query parses.
 	Language, Compiled string
-	// Confidence is what Translate knows about how far to trust it.
+	// Confidence is what the translator knows about how far to trust it.
 	Confidence Confidence
 }
 
-// A Trace is every try Translate made, in order, whether or not one was accepted.
+// A Trace is every try the translator made, in order, whether or not one was accepted.
 type Trace struct {
 	Tries []Try
 	// Steps are the actions the models asked for before answering (Options.Actions), in order.
@@ -198,152 +195,6 @@ const instructions = `
 # body => columns. Variables are ?name, strings are "quoted". Reply with the program alone.
 `
 
-// Translate asks m for a program answering question over v (#325): it drafts, parses and checks the
-// draft (datalog.Validate), and feeds an error back with Explain's text for m to fix, up to
-// o.MaxTries times, then hands the question to o.Fallback the same way. A draft the model already
-// wrote is refused unchecked and ends its turn (#340: a small model resending one draft spent every
-// retry on it), except the first repeat of one that answered nothing, which is asked again with the
-// reason restated (#483). With o.Base, a program that checks is evaluated too, and one answering nothing goes to
-// the fallback, or, when there is none left, back to the model to try other members or values. g,
-// when not nil, grounds the question's names first, and o.Pack's Grounder does when g is nil. A pack
-// whose examples don't check fails Translate before any model is asked. The Trace holds every try, also when Translate fails, and the error
-// then wraps the last try's. With o.Abstain, an answer or failure its policy covers comes back as an
-// *Abstained instead.
-func Translate(ctx context.Context, question string, v *ns.Vocabulary, g Grounder, m Model, o Options) (Program, Trace, error) {
-	p, tr, err := translate(ctx, question, v, g, m, o)
-	return o.Abstain.Judge(p, tr, err)
-}
-
-func translate(ctx context.Context, question string, v *ns.Vocabulary, g Grounder, m Model, o Options) (Program, Trace, error) {
-	var tr Trace
-	spend := &spending{budget: o.Budget, start: time.Now()}
-	s, err := NewSession(ctx, question, v, g, o)
-	if err != nil {
-		return Program{}, tr, err
-	}
-	models := []Model{m}
-	if o.Fallback != nil {
-		models = append(models, o.Fallback)
-	}
-	var last error
-	var held *Program // an answer escalated past, kept in case nothing better comes
-	pick, err := s.Pick()
-	if err != nil {
-		return Program{}, tr, err
-	}
-	if pick != nil {
-		p, prompt, ok, err := pickCall(ctx, pick, m, &tr, spend)
-		if err != nil {
-			return Program{}, tr, err
-		}
-		if ok {
-			p.Confidence = Confidence{Drawn: 1, Agreed: 1, Ran: o.Base != nil, Judged: o.Pack.Check != nil}
-			if o.Vote != nil {
-				conf := p.Confidence
-				p, tr.Votes = vote(ctx, m, prompt, p, pick, o.Vote, spend)
-				conf.Drawn, conf.Agreed = p.Confidence.Drawn, p.Confidence.Agreed
-				p.Confidence = conf
-			}
-			if !(o.Escalate > 0 && p.Confidence.Agreement() < o.Escalate) {
-				return p, tr, nil
-			}
-			tr.Escalations = append(tr.Escalations, Escalation{Model: m.Name(), Text: p.Text, Confidence: p.Confidence})
-			held = &p
-		}
-	}
-	compact := o.Actions != nil && o.Actions.Compact
-	for k, model := range models {
-		c := s.NewConversation(last, k == len(models)-1)
-		turns := []Turn{{RoleUser, c.Ask()}}
-	turn:
-		for {
-			if err := ctx.Err(); err != nil {
-				return Program{}, tr, err
-			}
-			if err := spend.check(); err != nil {
-				return Program{}, tr, err
-			}
-			grammar, acting := s.ActionGrammar(), o.Actions.replies()
-			if acting && c.Steps() >= s.MaxSteps() {
-				grammar, acting = s.Grammar(), false // out of steps: the next reply is the answer
-			}
-			sent := turns
-			if compact {
-				sent = c.Compact()
-			}
-			try, err := complete(ctx, model, Prompt{Prefix: s.Prefix(), Turns: sent, Grammar: grammar})
-			spend.add(try.TokensIn, try.TokensOut)
-			if err != nil {
-				if o.FrontEnd != nil {
-					try.Language = o.FrontEnd.Language()
-				}
-				tr.Tries = append(tr.Tries, try)
-				last = err
-				break
-			}
-			if acting {
-				if action, arg, ok := readAction(unfence(try.Text)); ok {
-					text := unfence(try.Text)
-					result := c.Act(ctx, action, arg)
-					tr.Steps = append(tr.Steps, Step{Model: try.Model, Action: action, Text: text, Result: result, After: len(tr.Tries),
-						TokensIn: try.TokensIn, TokensOut: try.TokensOut, TokensCached: try.TokensCached, Latency: try.Latency})
-					turns = append(turns, Turn{RoleModel, text}, Turn{RoleUser, result})
-					continue
-				}
-			}
-			vd := c.Judge(ctx, try)
-			tr.Tries = append(tr.Tries, vd.Tries...)
-			switch {
-			case vd.Program != nil:
-				p := *vd.Program
-				p.Confidence = Confidence{Drawn: 1, Agreed: 1, Ran: o.Base != nil, Judged: o.Pack != nil && o.Pack.Check != nil, Steps: c.Steps()}
-				if o.Vote != nil {
-					var votes []Try
-					conf := p.Confidence
-					p, votes = vote(ctx, model, Prompt{Prefix: s.Prefix(), Turns: sent, Grammar: s.Grammar()}, p, s, o.Vote, spend)
-					conf.Drawn, conf.Agreed = p.Confidence.Drawn, p.Confidence.Agreed
-					p.Confidence = conf
-					tr.Votes = append(tr.Votes, votes...)
-				}
-				if o.Escalate > 0 && p.Confidence.Agreement() < o.Escalate && k < len(models)-1 {
-					tr.Escalations = append(tr.Escalations, Escalation{Model: model.Name(), Text: p.Text, Confidence: p.Confidence})
-					if held == nil {
-						held = &p
-					}
-					last = errLowAgreement
-					break turn
-				}
-				return p, tr, nil
-			case vd.Stop != nil:
-				last = vd.Stop
-				break turn
-			}
-			reply := vd.Tries[len(vd.Tries)-1].Text
-			turns = append(turns, Turn{RoleModel, reply}, Turn{RoleUser, vd.Continue})
-		}
-	}
-	if held != nil {
-		return *held, tr, nil
-	}
-	return Program{}, tr, fmt.Errorf("%w after %d tries: %w", ErrNoProgram, len(tr.Tries), last)
-}
-
-// complete asks model once, timing it, and returns its reply as a Try that carries what it cost. A
-// model that failed comes back as a Try of KindModel holding its error, and an error naming the model.
-func complete(ctx context.Context, model Model, p Prompt) (Try, error) {
-	try := Try{Model: model.Name()}
-	start := time.Now()
-	c, err := model.Complete(ctx, p)
-	try.Latency = time.Since(start)
-	if err != nil {
-		try.Err, try.Kind = err, KindModel
-		return try, fmt.Errorf("model %s: %w", try.Model, err)
-	}
-	try.Text = c.Text
-	try.TokensIn, try.TokensOut, try.TokensCached = c.TokensIn, c.TokensOut, c.TokensCached
-	return try, nil
-}
-
 // reask is what a model is told when it resends a draft that answered nothing (#483): that it did, what
 // it was told the first time (told, in the draft's language), the call to change when the empty report
 // names one in jaala's terms, and the grounded values again, since by now they are far back.
@@ -360,12 +211,9 @@ func reask(pr Prompts, what, told string, err error, frontEnd bool, cands []Cand
 	return fmt.Sprintf(pr.Reask, what, told, grounded(pr.Grounded, cands), change)
 }
 
-// errLowAgreement is an answer whose vote agreed less than Options.Escalate asks.
-var errLowAgreement = errors.New("the drafts agreed too little on an answer")
-
 // promptPrefix is every question's Prefix: the card and instructions, jaala's or the front end's, then
 // the pack's part, with the front end's examples in place of the pack's. Examples are checked first,
-// so a broken one fails Translate before any model is asked.
+// so a broken one fails the translator before any model is asked.
 func promptPrefix(v *ns.Vocabulary, o Options) (string, error) {
 	fe := o.FrontEnd
 	if fe == nil {
@@ -448,7 +296,7 @@ func hintFor(ctx context.Context, p *Pack, why *datalog.EmptyReport) string {
 	return p.Hint(ctx, why)
 }
 
-// Is makes an EmptyAnswer the empty answer Translate moves to the fallback on.
+// Is makes an EmptyAnswer the empty answer the translator moves to the fallback on.
 func (e *EmptyAnswer) Is(target error) bool { return target == errEmpty }
 
 // check compiles or parses try's text, checks it and, over o.Base, evaluates it, with at most limit

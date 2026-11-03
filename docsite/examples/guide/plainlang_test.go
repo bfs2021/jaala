@@ -4,10 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	agent "github.com/panyam/chakra"
 	"strings"
 
 	"github.com/panyam/jaala/datalog"
 	"github.com/panyam/jaala/frontends/nl"
+	"github.com/panyam/jaala/frontends/nlmodels/translator"
 )
 
 // Card lists the vocabulary a line per member, for a model's prompt. The
@@ -108,41 +110,51 @@ func Example_explainAnError() {
 	// kind arity, about pkg
 }
 
-// scriptedModel replies with its drafts in turn. A host's Model would ask a
-// real one, a local model through nlmodels or a hosted one.
-type scriptedModel struct {
-	drafts []string
-	n      int
-}
-
-func (m *scriptedModel) Name() string { return "scripted" }
-
-func (m *scriptedModel) Complete(_ context.Context, p nl.Prompt) (nl.Completion, error) {
-	if m.n > 0 {
-		fmt.Printf("told: %s\n\n", p.Turns[len(p.Turns)-1].Text)
+// scripted stands in for a model: chakra's StubProvider replying with the
+// drafts in turn. A host's provider asks a real one, a local model through
+// chakra's llama.cpp preset or a hosted one.
+func scripted(drafts ...string) *agent.StubProvider {
+	var turns []agent.StubTurn
+	for _, d := range drafts {
+		turns = append(turns, agent.StubTurn{Text: d})
 	}
-	m.n++
-	return nl.Completion{Text: m.drafts[m.n-1]}, nil
+	return agent.NewStubProvider(turns...)
 }
 
-// Translate asks a model for a program, checks it, and hands each error
-// back until one checks. With a Base it runs the program too, so an empty
-// answer can go to a fallback model.
+// told prints what the model was told after each refused draft: the last
+// message of every request after the first.
+func told(model *agent.StubProvider) {
+	for _, req := range model.Requests()[1:] {
+		fmt.Printf("told: %s\n\n", req.Messages[len(req.Messages)-1].Text)
+	}
+}
+
+// The translator asks a model for a program, checks it, and hands each
+// error back until one checks. With a Base it runs the program too, so an
+// empty answer can go to a fallback model.
 func Example_translate() {
 	v, err := vocabulary(source())
 	if err != nil {
 		panic(err)
 	}
-	m := &scriptedModel{drafts: []string{
+	model := scripted(
 		`depends_on("app", ?d) => ?d`,
 		"```\ndeps.depends_on(\"app\", ?d) => ?d\n```",
-	}}
+	)
 	b := datalog.MustBase(v, source())
-	p, tr, err := nl.Translate(context.Background(), "what does app depend on?", v, nil, m, nl.Options{Base: b})
+	t, err := translator.New(v, nil, translator.Config{
+		Model: translator.Role{Provider: model, Label: "scripted"},
+		Base:  b,
+	})
+	if err != nil {
+		panic(err)
+	}
+	p, tr, err := t.Ask(context.Background(), "what does app depend on?")
 	if err != nil {
 		fmt.Println(err)
 		return
 	}
+	told(model)
 	for _, t := range tr.Tries {
 		fmt.Printf("try by %s: %q\n", t.Model, t.Kind)
 	}
@@ -178,17 +190,6 @@ func Example_grammar() {
 	// rule ::= head " :- " literals
 }
 
-// draftsByQuestion answers each question with its own drafts in turn.
-type draftsByQuestion map[string][]string
-
-func (d draftsByQuestion) Name() string { return "scripted" }
-
-func (d draftsByQuestion) Complete(_ context.Context, p nl.Prompt) (nl.Completion, error) {
-	q := p.Turns[0].Text
-	n := len(p.Turns) / 2 // a refused draft adds two turns
-	return nl.Completion{Text: d[q][n]}, nil
-}
-
 // Eval scores a translator over questions with known answers: a row
 // matches by its values, whatever columns the program chose.
 func Example_eval() {
@@ -197,19 +198,22 @@ func Example_eval() {
 		panic(err)
 	}
 	b := datalog.MustBase(v, source())
-	m := draftsByQuestion{
-		"what does app import?":        {`imports("app", ?d) => ?d`},
-		"what license does util have?": {`pkg("util") => ?l`, `pkg("util", ?l) => ?l`},
-		"which packages import log?":   {`imports(?p, log) => ?p`, `imports(?p, "log") => ?p`},
+	// the drafts for each case in turn: one for direct, two each for the others
+	model := scripted(
+		`imports("app", ?d) => ?d`,
+		`pkg("util") => ?l`, `pkg("util", ?l) => ?l`,
+		`imports(?p, log) => ?p`, `imports(?p, "log") => ?p`,
+	)
+	t, err := translator.New(v, nil, translator.Config{Model: translator.Role{Provider: model}})
+	if err != nil {
+		panic(err)
 	}
 	cases := []nl.Case{
 		{Name: "direct", Question: "what does app import?", Want: [][]string{{"api"}}},
 		{Name: "license", Question: "what license does util have?", Want: [][]string{{"Apache-2.0"}}},
 		{Name: "importers", Question: "which packages import log?", Want: [][]string{{"api"}}},
 	}
-	rep := nl.Eval(context.Background(), cases, b, func(ctx context.Context, q string) (nl.Program, nl.Trace, error) {
-		return nl.Translate(ctx, q, v, nil, m, nl.Options{})
-	})
+	rep := nl.Eval(context.Background(), cases, b, t.Ask)
 	fmt.Print(rep)
 	// Output:
 	// case       pass  tries  refused

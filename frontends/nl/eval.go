@@ -25,8 +25,8 @@ type Case struct {
 	Ordered  bool
 }
 
-// A Result is how one Case went: the program Translate accepted and its Trace, the rows it answered
-// as text, whether they were Want's, and the error when Translate or the evaluation failed.
+// A Result is how one Case went: the program the translator accepted and its Trace, the rows it answered
+// as text, whether they were Want's, and the error when the translator or the evaluation failed.
 type Result struct {
 	Case
 	Program Program
@@ -40,8 +40,8 @@ type Result struct {
 func (r Result) FirstTry() bool { return r.Pass && len(r.Trace.Tries) == 1 }
 
 // Class sorts a failed case by what went wrong (ClassGrounding and the rest), "" for one that
-// passed: abstained when Translate abstained (Options.Abstain), the budget when it ran out, the last
-// try's class when Translate failed, and semantics for a program that answered the wrong rows.
+// passed: abstained when the translator abstained (Options.Abstain), the budget when it ran out, the last
+// try's class when the translator failed, and semantics for a program that answered the wrong rows.
 func (r Result) Class() string {
 	var bs *BudgetSpent
 	var ab *Abstained
@@ -90,8 +90,8 @@ type Report struct {
 }
 
 // Eval runs each case's question through translate and scores its answer over b (#326). translate is
-// usually Translate closed over a vocabulary, a model and options; a host may wrap its own fallback or
-// tool around it. A program Translate already ran over Options.Base keeps those rows; any other is
+// usually the translator closed over a vocabulary, a model and options; a host may wrap its own fallback or
+// tool around it. A program the translator already ran over Options.Base keeps those rows; any other is
 // evaluated over b with the planned SemiNaive. A case that fails, in translate or evaluating, fails
 // alone: Eval always scores every case, and stops early only when ctx is done.
 func Eval(ctx context.Context, cases []Case, b *datalog.Base, translate func(ctx context.Context, question string) (Program, Trace, error)) Report {
@@ -224,7 +224,7 @@ func costliestLiteral(r *datalog.Report) *datalog.LiteralReport {
 }
 
 // String writes the report as a model's run is read: a line per case (pass, tries, the work of the
-// program it answered with when Translate evaluated it, and the kinds its tries were refused for), the
+// program it answered with when the translator evaluated it, and the kinds its tries were refused for), the
 // totals, then the three costliest drafts and where their work went.
 func (rep Report) String() string {
 	var b strings.Builder

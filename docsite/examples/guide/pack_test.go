@@ -6,6 +6,7 @@ import (
 
 	"github.com/panyam/jaala/datalog"
 	"github.com/panyam/jaala/frontends/nl"
+	"github.com/panyam/jaala/frontends/nlmodels/translator"
 )
 
 // DataCard writes what the data holds, for a pack's Card: each relation's
@@ -56,11 +57,12 @@ func Example_pack() {
 	}
 	fmt.Print(pack.Prefix())
 
-	m := draftsByQuestion{"which package imports log?": {
-		`imports(?p, ?q) => ?p`,
-		`imports(?p, "log") => ?p`,
-	}}
-	p, tr, err := nl.Translate(context.Background(), "which package imports log?", v, nil, m, nl.Options{Base: b, Pack: &pack})
+	model := scripted(`imports(?p, ?q) => ?p`, `imports(?p, "log") => ?p`)
+	t, err := translator.New(v, &pack, translator.Config{Model: translator.Role{Provider: model}, Base: b})
+	if err != nil {
+		panic(err)
+	}
+	p, tr, err := t.Ask(context.Background(), "which package imports log?")
 	if err != nil {
 		fmt.Println(err)
 		return

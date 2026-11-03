@@ -11,7 +11,7 @@ import (
 	"github.com/panyam/mcpkit/core"
 )
 
-// The look, values and find tools are nl.Translate's actions (#393) offered to an agent, so a small
+// The look, values and find tools are the translator's actions (#393) offered to an agent, so a small
 // model's loop and an agent's calls say the same things in the same words. A try is query or cypher
 // with sample: run on a few rows, saying why when none come back.
 

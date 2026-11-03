@@ -77,6 +77,7 @@ func dial(t *testing.T, p mcp.Pack, o mcp.Options) *testutil.TestClient {
 	if o.Base == nil {
 		o.Base = func(context.Context) (*datalog.Base, error) { return b, nil }
 	}
+	withVocabulary(o, v)
 	srv, err := mcp.New(v, p, o)
 	if err != nil {
 		t.Fatal(err)
@@ -268,7 +269,7 @@ func TestAskTranslatesThroughThePack(t *testing.T) {
 	}
 	small := &scripted{name: "small", replies: []string{`trip.reach("a", ?t) => ?t`, `road("a", ?t) => ?t`}}
 	big := &scripted{name: "big", replies: []string{`road("a", ?t) => ?t`}}
-	c := dial(t, checked, mcp.Options{Model: small, Fallback: big})
+	c := dial(t, checked, mcp.Options{Translator: translating(small, big)})
 	text := c.ToolCall("ask", map[string]any{"question": "which town is next after a?"})
 	for _, want := range []string{"program:\n  road(\"a\", ?t) => ?t", "1. b\n", "1. small: answer", "2. small: accepted"} {
 		if !strings.Contains(text, want) {
@@ -280,13 +281,13 @@ func TestAskTranslatesThroughThePack(t *testing.T) {
 	}
 	big = &scripted{name: "big", replies: []string{`road("a", ?t) => ?t`}}
 	small = &scripted{name: "small"}
-	c = dial(t, checked, mcp.Options{Model: small, Fallback: big})
+	c = dial(t, checked, mcp.Options{Translator: translating(small, big)})
 	if text := c.ToolCall("ask", map[string]any{"question": "which town is next after a?", "mode": "frontier"}); !strings.Contains(text, "1. big: accepted") || small.asked != 0 {
 		t.Errorf("frontier asked the small model %d times:\n%s", small.asked, text)
 	}
 	small = &scripted{name: "small", replies: []string{`nowhere(?t) => ?t`}}
 	big = &scripted{name: "big", replies: []string{`road("a", ?t) => ?t`}}
-	c = dial(t, checked, mcp.Options{Model: small, Fallback: big, Limit: 5})
+	c = dial(t, checked, mcp.Options{Translator: translating(small, big), Limit: 5})
 	res := call(t, c, "ask", map[string]any{"question": "which town is next after a?", "mode": "local"})
 	if !res.IsError || big.asked != 0 || !strings.Contains(res.Content[0].Text, "small: unknown") {
 		t.Errorf("local: fallback asked %d times, %+v", big.asked, res.Content)
@@ -357,7 +358,7 @@ func TestAnEmptyAnswerCarriesThePacksHint(t *testing.T) {
 func TestAskSaysWhenItIsNotConfident(t *testing.T) {
 	abstain := &nl.Abstain{NoAnswer: true}
 	small := &scripted{name: "small", replies: []string{`nowhere(?t) => ?t`, `nowhere(?t) => ?t`}}
-	res := call(t, dial(t, pack, mcp.Options{Model: small, Abstain: abstain}), "ask", map[string]any{"question": "which town is next after a?"})
+	res := call(t, dial(t, pack, mcp.Options{Translator: translating(small), Abstain: abstain}), "ask", map[string]any{"question": "which town is next after a?"})
 	text := res.Content[0].Text
 	for _, want := range []string{"not confident (repeat): no answer.", "closest draft, from small:\n  nowhere(?t) => ?t", "why it wasn't taken:\n  ", "nowhere", "2. small: repeat"} {
 		if res.IsError || !strings.Contains(text, want) {
@@ -365,11 +366,11 @@ func TestAskSaysWhenItIsNotConfident(t *testing.T) {
 		}
 	}
 	small = &scripted{name: "small", replies: []string{`nowhere(?t) => ?t`, `nowhere(?t) => ?t`}}
-	if res := call(t, dial(t, pack, mcp.Options{Model: small}), "ask", map[string]any{"question": "which town is next after a?"}); !res.IsError {
+	if res := call(t, dial(t, pack, mcp.Options{Translator: translating(small)}), "ask", map[string]any{"question": "which town is next after a?"}); !res.IsError {
 		t.Errorf("control: without Abstain, %+v", res.Content)
 	}
 	down := &scripted{name: "small"}
-	if res := call(t, dial(t, pack, mcp.Options{Model: down, Abstain: abstain}), "ask", map[string]any{"question": "which town is next after a?"}); !res.IsError {
+	if res := call(t, dial(t, pack, mcp.Options{Translator: translating(down), Abstain: abstain}), "ask", map[string]any{"question": "which town is next after a?"}); !res.IsError {
 		t.Errorf("control: a model that fails, %+v", res.Content)
 	}
 }

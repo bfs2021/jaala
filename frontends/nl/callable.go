@@ -1,8 +1,6 @@
 package nl
 
 import (
-	"context"
-	"errors"
 	"fmt"
 	"strings"
 
@@ -11,7 +9,7 @@ import (
 
 // A Callable is a relation of the host's that answers a kind of question on its own once its arguments
 // are filled (#484): callers of a function, tests reaching a file, routes in a repo. With Pack.Callables
-// set, Translate first asks the model to pick one and fill its arguments, a much smaller reply than a
+// set, the translator first asks the model to pick one and fill its arguments, a much smaller reply than a
 // program and one a grammar holds to the catalogue, and drafts a program only when none fits.
 type Callable struct {
 	// Relation is the member's path in the vocabulary, base or derived.
@@ -25,10 +23,10 @@ type Callable struct {
 }
 
 // ActionNone is a Step's Action for a pick the model declined, replying none: no relation answers the
-// question, and Translate drafts a program.
+// question, and the translator drafts a program.
 const ActionNone = "none"
 
-// pickTries is how many calls a model may pick before Translate drafts a program instead: the first,
+// pickTries is how many calls a model may pick before the translator drafts a program instead: the first,
 // and one more after its refusal comes back.
 const pickTries = 2
 
@@ -132,45 +130,6 @@ func pickRules(cs []Callable, v *ns.Vocabulary) ([]rule, error) {
 		out = append(out, r)
 	}
 	return reachable(append(out, extra...)), nil
-}
-
-// pickCall asks model to answer the question with one of the pack's callables (#484), up to pickTries
-// times, each refusal going back as a draft's does. It returns the accepted program, or false when the
-// model replied none or no call it picked was accepted; Translate then drafts a program. Each call is
-// a Try with Mode "call", and a none a Step. A pick is jaala's text whatever o.FrontEnd is.
-func pickCall(ctx context.Context, pick *Session, model Model, tr *Trace, spend *spending) (Program, Prompt, bool, error) {
-	c := pick.NewConversation(nil, true)
-	turns := []Turn{{RoleUser, c.Ask()}}
-	for {
-		if err := ctx.Err(); err != nil {
-			return Program{}, Prompt{}, false, err
-		}
-		if err := spend.check(); err != nil {
-			return Program{}, Prompt{}, false, err
-		}
-		prompt := Prompt{Prefix: pick.Prefix(), Turns: turns, Grammar: pick.Grammar()}
-		try, err := complete(ctx, model, prompt)
-		if err != nil {
-			try.Err, try.Mode = err, ModeCall
-			tr.Tries = append(tr.Tries, try)
-			return Program{}, Prompt{}, false, nil
-		}
-		spend.add(try.TokensIn, try.TokensOut)
-		vd := c.Judge(ctx, try)
-		if errors.Is(vd.Stop, ErrNoCall) {
-			tr.Steps = append(tr.Steps, Step{Model: try.Model, Action: ActionNone, Text: unfence(try.Text), Result: "no relation answers it: drafting a program",
-				After: len(tr.Tries), TokensIn: try.TokensIn, TokensOut: try.TokensOut, TokensCached: try.TokensCached, Latency: try.Latency})
-			return Program{}, Prompt{}, false, nil
-		}
-		tr.Tries = append(tr.Tries, vd.Tries...)
-		switch {
-		case vd.Program != nil:
-			return *vd.Program, prompt, true, nil
-		case vd.Stop != nil:
-			return Program{}, Prompt{}, false, nil
-		}
-		turns = append(turns, Turn{RoleModel, vd.Tries[0].Text}, Turn{RoleUser, vd.Continue})
-	}
 }
 
 // ModeCall is a Try's Mode for a call the model picked from Pack.Callables (#484); a drafted program's

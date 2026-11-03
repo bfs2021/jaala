@@ -17,7 +17,7 @@ func FuzzCompile(f *testing.F) {
 	for _, c := range depsCases {
 		f.Add(c.cypher)
 	}
-	for _, ds := range drafts {
+	for _, ds := range guide.CypherDrafts {
 		for _, d := range ds {
 			f.Add(d)
 		}

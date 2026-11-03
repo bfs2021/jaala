@@ -2,6 +2,7 @@ package cypher_test
 
 import (
 	"errors"
+	"flag"
 	"fmt"
 	"os"
 	"strings"
@@ -10,6 +11,8 @@ import (
 	"github.com/panyam/jaala/frontends/cypher"
 	"github.com/panyam/jaala/internal/guide"
 )
+
+var update = flag.Bool("update", false, "rewrite the golden files in testdata")
 
 // conformance reads testdata/conformance.txt: its queries by section, each a block of lines between
 // blank lines, notes (# ...) left out.

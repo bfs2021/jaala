@@ -17,9 +17,9 @@ import (
 )
 
 // script answers each question with its own replies in turn, as a model making the same mistakes
-// every run would, keyed by the first line of the conversation's first message. It is an nl.Model
-// for nl.Translate and an agent.Provider for the Runner loop, so the two loops can be held to one
-// script (#496). A reply that is a text action (look NAME, values TARGET, find NAME, try and a draft)
+// every run would, keyed by the first line of the conversation's first message. It was an nl.Model
+// for nl.Translate and an agent.Provider for the Runner loop, so #500 could hold the two loops to one
+// script before nl.Translate went (#496); the arms below still check the loop reaches each path. A reply that is a text action (look NAME, values TARGET, find NAME, try and a draft)
 // is a tool call when the request offers tools, and text otherwise. A guided request offering no
 // tools right after a text answer to a request that offered them is chakra's finalizing call, and
 // gets that answer again.
@@ -241,92 +241,6 @@ func arms() []arm {
 			opts: func(b *datalog.Base) nl.Options {
 				return nl.Options{Base: b, Vote: &nl.Vote{Drafts: 3}, Escalate: 0.6}
 			}},
-	}
-}
-
-// outcome is what the differential compares of one case: everything a loop decides, not what the
-// calls cost.
-func outcome(r nl.Result) string {
-	var b strings.Builder
-	fmt.Fprintf(&b, "pass %v, got %v, by %q: %q, err %v\n", r.Pass, r.Got, r.Program.Model, r.Program.Text, r.Err != nil)
-	c := r.Program.Confidence
-	fmt.Fprintf(&b, "  confidence %d/%d ran %v judged %v steps %d\n", c.Agreed, c.Drawn, c.Ran, c.Judged, c.Steps)
-	for _, t := range r.Trace.Tries {
-		fmt.Fprintf(&b, "  try %s %q kind %q mode %q repair %q reasked %v\n", t.Model, t.Text, t.Kind, t.Mode, t.Repair, t.Reasked)
-	}
-	for _, s := range r.Trace.Steps {
-		fmt.Fprintf(&b, "  step %s %s %q after %d: %q\n", s.Model, s.Action, s.Text, s.After, s.Result)
-	}
-	for _, t := range r.Trace.Votes {
-		fmt.Fprintf(&b, "  vote %s %q kind %q\n", t.Model, t.Text, t.Kind)
-	}
-	for _, e := range r.Trace.Escalations {
-		fmt.Fprintf(&b, "  escalated %s %q %d/%d\n", e.Model, e.Text, e.Confidence.Agreed, e.Confidence.Drawn)
-	}
-	return b.String()
-}
-
-// The Runner loop decides what nl.Translate decides (#496): over TestEval's and TestEvalCallable's
-// scripts, and scripts taking actions, repairing a spelling, voting and escalating, every case passes
-// or fails alike, with the same answer, tries, steps, votes and escalations. control: each arm's
-// reference scores what it was scripted to, so the arms exercise what they're named for.
-func TestTheRunnerLoopDecidesAsTranslateDoes(t *testing.T) {
-	v, b := guide.Deps(t)
-	for _, a := range arms() {
-		o := a.opts(b)
-		o.Pack = a.pack
-		var refBig nl.Model = (*script)(nil)
-		if a.big != nil {
-			refBig = scripted("big", a.big)
-		}
-		small := scripted("small", a.small)
-		ref := nl.Eval(context.Background(), a.cases, b, func(ctx context.Context, q string) (nl.Program, nl.Trace, error) {
-			ro := o
-			if a.big != nil {
-				ro.Fallback = refBig
-			}
-			return nl.Translate(ctx, q, v, nil, small, ro)
-		})
-		if ref.Passed != a.wantPassed || ref.PassedFirstTry != a.wantFirstTry {
-			t.Errorf("%s: control: the reference passed %d, %d first try", a.name, ref.Passed, ref.PassedFirstTry)
-		}
-		runSmall, runBig := scripted("small", a.small), scripted("big", a.big)
-		cfg := Config{Model: Role{Provider: runSmall, Label: "small"}, Base: b,
-			Options: func(p *nl.Options) { *p = o }}
-		if a.big != nil {
-			cfg.Fallback = Role{Provider: runBig, Label: "big"}
-		}
-		tr, err := New(v, a.pack, cfg)
-		if err != nil {
-			t.Fatal(err)
-		}
-		got := nl.Eval(context.Background(), a.cases, b, tr.Ask)
-		for i := range a.cases {
-			if w, g := outcome(ref.Cases[i]), outcome(got.Cases[i]); w != g {
-				t.Errorf("%s, %s:\nnl.Translate:\n%sRunner:\n%s", a.name, a.cases[i].Name, w, g)
-			}
-		}
-		if a.actions {
-			continue
-		}
-		for _, m := range []struct {
-			name     string
-			ref, got *script
-		}{{"small", small, runSmall}, {"big", refBig.(*script), runBig}} {
-			if m.ref == nil {
-				continue
-			}
-			if len(m.ref.asks) != len(m.got.asks) {
-				t.Errorf("%s: %s asked %d times by nl.Translate, %d by the Runner", a.name, m.name, len(m.ref.asks), len(m.got.asks))
-				continue
-			}
-			for i := range m.ref.asks {
-				if m.ref.asks[i] != m.got.asks[i] {
-					t.Errorf("%s: %s's ask %d:\nnl.Translate:\n%sRunner:\n%s", a.name, m.name, i, m.ref.asks[i], m.got.asks[i])
-					break
-				}
-			}
-		}
 	}
 }
 

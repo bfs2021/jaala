@@ -1,7 +1,8 @@
-package nl_test
+package translator_test
 
 import (
 	"context"
+	"slices"
 	"strings"
 	"testing"
 
@@ -10,26 +11,16 @@ import (
 )
 
 // looker writes the answer right only once a result in its conversation shows "MIT"; blind, it
-// guesses the license's spelling. It asks for the values first when the prompt says it may.
+// guesses the license's spelling. It asks for the values first when it is offered them as a tool.
 type looker struct {
 	ask, right, wrong string
 	asked             []nl.Prompt
+	offered           [][]string
 }
+
+func (m *looker) Offer(names []string, _ map[string]string) { m.offered = append(m.offered, names) }
 
 func (m *looker) Name() string { return "small" }
-
-func (m *looker) Complete(_ context.Context, p nl.Prompt) (nl.Completion, error) {
-	m.asked = append(m.asked, p)
-	for _, t := range p.Turns[1:] {
-		if t.Role == nl.RoleUser && strings.Contains(t.Text, `"MIT"`) {
-			return nl.Completion{Text: m.right, TokensIn: 10, TokensOut: 5}, nil
-		}
-	}
-	if strings.Contains(p.Prefix, "values TARGET") && len(p.Turns) == 1 {
-		return nl.Completion{Text: m.ask, TokensIn: 10, TokensOut: 3}, nil
-	}
-	return nl.Completion{Text: m.wrong, TokensIn: 10, TokensOut: 5}, nil
-}
 
 // With Actions a model looks at the values before answering, and the answer is its first try; the
 // step's tokens count in the report. control: the same model without Actions only ever guesses, and
@@ -37,7 +28,7 @@ func (m *looker) Complete(_ context.Context, p nl.Prompt) (nl.Completion, error)
 func TestActionsLookAtTheDataBeforeAnswering(t *testing.T) {
 	v, b := guide.Deps(t)
 	m := &looker{ask: "values pkg.license", right: `pkg(?p, "MIT") => ?p`, wrong: `pkg(?p, "mit") => ?p`}
-	p, tr, err := nl.Translate(context.Background(), "which packages are MIT licensed?", v, nil, m, nl.Options{Base: b, Actions: &nl.Actions{}})
+	p, tr, err := translate(context.Background(), "which packages are MIT licensed?", v, nil, m, nl.Options{Base: b, Actions: &nl.Actions{}})
 	if err != nil || p.Text != m.right || len(p.Rows) != 1 {
 		t.Fatalf("Translate = %+v, %v", p, err)
 	}
@@ -47,19 +38,19 @@ func TestActionsLookAtTheDataBeforeAnswering(t *testing.T) {
 	if res := tr.Steps[0].Result; !strings.Contains(res, `"MIT"`) || !strings.Contains(res, `"Apache-2.0"`) || !strings.Contains(res, "absent") {
 		t.Errorf("values sent back %q", res)
 	}
-	if g := m.asked[0].Grammar; !strings.HasPrefix(g, `root ::= "look " target | "values " target`) || !strings.Contains(g, "program ::=") {
-		t.Errorf("the grammar doesn't take actions:\n%.200s", g)
+	if got := m.offered[0]; !slices.Equal(got, []string{nl.ActionLook, nl.ActionValues, nl.ActionTry}) || m.asked[0].Grammar != "" {
+		t.Errorf("the first request offered %v, with a grammar %v", got, m.asked[0].Grammar != "")
 	}
 	rep := nl.Eval(context.Background(), []nl.Case{{Name: "mit", Question: "which packages are MIT licensed?", Want: [][]string{{"app"}}}}, b,
 		func(ctx context.Context, q string) (nl.Program, nl.Trace, error) {
-			return nl.Translate(ctx, q, v, nil, &looker{ask: m.ask, right: m.right, wrong: m.wrong}, nl.Options{Base: b, Actions: &nl.Actions{}})
+			return translate(ctx, q, v, nil, &looker{ask: m.ask, right: m.right, wrong: m.wrong}, nl.Options{Base: b, Actions: &nl.Actions{}})
 		})
 	if rep.Passed != 1 || rep.PassedFirstTry != 1 || rep.Steps != 1 || rep.TokensOut != 8 || !strings.Contains(rep.String(), "1 tries and 1 steps") {
 		t.Errorf("report: %+v\n%s", rep, rep.String())
 	}
 
 	blind := &looker{ask: m.ask, right: m.right, wrong: m.wrong}
-	_, tr, err = nl.Translate(context.Background(), "which packages are MIT licensed?", v, nil, blind, nl.Options{Base: b})
+	_, tr, err = translate(context.Background(), "which packages are MIT licensed?", v, nil, blind, nl.Options{Base: b})
 	if err == nil || len(tr.Steps) != 0 || tr.Tries[0].Kind != nl.KindEmpty {
 		t.Errorf("control: without Actions, %v, steps %d, %+v", err, len(tr.Steps), tr.Tries)
 	}
@@ -77,7 +68,7 @@ func TestEachActionSendsBackWhatItFound(t *testing.T) {
 		"values pkg.nope",
 		"values pkg.1",
 		`pkg(?p, "MIT") => ?p`)
-	p, tr, err := nl.Translate(context.Background(), "which packages are MIT licensed?", v, nil, m, nl.Options{Base: b, Actions: &nl.Actions{Steps: 6, Sample: 2}})
+	p, tr, err := translate(context.Background(), "which packages are MIT licensed?", v, nil, m, nl.Options{Base: b, Actions: &nl.Actions{Steps: 6, Sample: 2}})
 	if err != nil || p.Text != `pkg(?p, "MIT") => ?p` || len(tr.Tries) != 1 || len(tr.Steps) != 6 {
 		t.Fatalf("Translate = %+v, %v, %d tries, %d steps", p, err, len(tr.Tries), len(tr.Steps))
 	}
@@ -98,22 +89,35 @@ func TestEachActionSendsBackWhatItFound(t *testing.T) {
 	}
 }
 
-// Steps run out: once a model has asked Steps actions it must answer, under the draft's grammar, and
-// an action then is a draft that doesn't parse. A repeated action says so.
+// Steps run out: once a model has asked Steps actions it is offered none and must answer, under the
+// draft's grammar, and an action then is a draft that doesn't parse. A repeated action says so.
 func TestStepsRunOut(t *testing.T) {
 	v, b := guide.Deps(t)
 	m := model("small", "look pkg", "look pkg", "look pkg", "look pkg")
-	_, tr, err := nl.Translate(context.Background(), "which packages are MIT licensed?", v, nil, m, nl.Options{Base: b, MaxTries: 2, Actions: &nl.Actions{Steps: 2}})
+	_, tr, err := translate(context.Background(), "which packages are MIT licensed?", v, nil, m, nl.Options{Base: b, MaxTries: 2, Actions: &nl.Actions{Steps: 2}})
 	if err == nil || len(tr.Steps) != 2 || len(tr.Tries) != 2 || tr.Tries[0].Kind != nl.KindParse {
 		t.Fatalf("%v, steps %d, tries %+v", err, len(tr.Steps), tr.Tries)
 	}
 	if !strings.HasPrefix(tr.Steps[1].Result, "You asked that already.") {
 		t.Errorf("a repeated look: %q", tr.Steps[1].Result)
 	}
-	if g := m.asked[2].Grammar; strings.Contains(g, `"look "`) || !strings.HasPrefix(g, "root ::=") {
-		t.Errorf("the grammar after the last step still takes actions:\n%.200s", g)
+	if g := m.asked[2].Grammar; strings.Contains(g, `"look "`) || !strings.HasPrefix(g, "root ::=") || m.offered[2] != nil {
+		t.Errorf("after the last step, tools %v and the grammar:\n%.200s", m.offered[2], g)
 	}
-	if !strings.Contains(m.asked[0].Prefix, "values TARGET") || strings.Contains(model("x").Name(), "?") {
-		t.Errorf("the prefix doesn't list the actions")
+	if len(m.offered[0]) != 3 || strings.Contains(m.asked[0].Prefix, "values TARGET") {
+		t.Errorf("the first request offered %v; the prefix lists the text actions: %v", m.offered[0], strings.Contains(m.asked[0].Prefix, "values TARGET"))
 	}
+}
+
+func (m *looker) Complete(_ context.Context, p nl.Prompt) (nl.Completion, error) {
+	m.asked = append(m.asked, p)
+	for _, t := range p.Turns[1:] {
+		if t.Role == nl.RoleUser && strings.Contains(t.Text, `"MIT"`) {
+			return nl.Completion{Text: m.right, TokensIn: 10, TokensOut: 5}, nil
+		}
+	}
+	if n := len(m.offered); n > 0 && slices.Contains(m.offered[n-1], nl.ActionValues) && len(p.Turns) == 1 {
+		return nl.Completion{Text: m.ask, TokensIn: 10, TokensOut: 3}, nil
+	}
+	return nl.Completion{Text: m.wrong, TokensIn: 10, TokensOut: 5}, nil
 }

@@ -14,7 +14,7 @@ import (
 // any order with explicit indexes (%[2]s), and Pack.Validate refuses one that drops or adds any. A
 // field holds its own sentences; the blank lines between it and the rest of a turn are jaala's.
 type Prompts struct {
-	// Instructions follow the card in every Translate prompt written in jaala's language.
+	// Instructions follow the card in every prompt the translator writes in jaala's language.
 	Instructions string
 	// FrontEndInstructions replace a front end's own instructions (FrontEnd.Instructions), keyed by
 	// its Language, such as "cypher". The MCP server builds its Cypher front end itself, so this is
