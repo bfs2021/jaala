@@ -48,6 +48,10 @@ type Pack struct {
 	// relation without keys only ever gains facts. The engine never decides which facts are one
 	// (#183), so this is the host's to say.
 	Keys map[string][]int
+	// Callables are the relations that answer a kind of question on their own (#484). When set,
+	// Translate first asks the model to pick one and fill its arguments, and drafts a program only
+	// when it replies none or no call it picks is accepted.
+	Callables []Callable
 	// ExtractExamples are texts with the lines Extract should write for them, which follow the pack's
 	// About and Card in Extract's prefix. Translate doesn't read them.
 	ExtractExamples []ExtractExample
@@ -60,7 +64,7 @@ type Example struct {
 }
 
 // Validate checks that every example parses and checks against v, so a pack can't teach a model a
-// relation v doesn't have, that every key names a base relation of v and positions within its
+// relation v doesn't have, that every callable is a relation of v described at its arity, that every key names a base relation of v and positions within its
 // arity, and that every extraction example's lines are facts its text states. The error names the
 // first that doesn't. Translate and Extract call it before asking any model.
 func (p *Pack) Validate(v *ns.Vocabulary) error {
@@ -72,6 +76,9 @@ func (p *Pack) Validate(v *ns.Vocabulary) error {
 		if err != nil {
 			return fmt.Errorf("nl: the pack's example %d (%q): %w", i+1, e.Question, err)
 		}
+	}
+	if err := validateCallables(p.Callables, v); err != nil {
+		return err
 	}
 	rels := make([]string, 0, len(p.Keys))
 	for rel := range p.Keys {

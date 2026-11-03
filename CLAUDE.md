@@ -135,6 +135,12 @@ GOARCH=wasm go test ./ns` (#417 ran `ns` that way).
   exactly one other spelling (`spelling`: letters and digits, lower-cased) rewritten, from those and
   the refused argument's Domain (`domainOf`); the rewrite is kept only if it then passes, as a `Try`
   with `Repair`. `Actions.Compact` sends `memory.compact`'s one turn instead of the conversation.
+  `Pack.Callables` (#484, `callable.go`) are relations answering a question alone: `translate` first
+  asks the first model to pick one (`pickCall`: About, Card and the catalogue, a grammar of `none` or a
+  listed call, `pickTries` 2), a bare call being a program whose rows bind its variables; a `none` is a
+  Step, a pick a `Try` with `Mode` `call`, and anything else falls through to drafting. A pick is
+  jaala's text under any FrontEnd, voted on with its own prompt and escalated past like a draft.
+  `TestEvalCallable` is the pick arm (`testdata/eval_call.golden`), `TestEval` the drafting arm.
 - **`nl.Grammar()` is GBNF built from a rule table** (`frontends/nl/grammar.go`, #323), and every text it
   accepts must parse: `TestEveryProgramTheGrammarWritesParses` samples 21,000 programs from the table
   over 70 seeds and every depth (one seed alone missed `-(9)` as a column). The other direction lives

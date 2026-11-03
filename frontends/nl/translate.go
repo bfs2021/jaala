@@ -167,6 +167,10 @@ type Try struct {
 	Report *datalog.Report
 
 	explain func(error) string // how Err goes back to the model, in the draft's language
+	// Mode is ModeCall for a call the model picked from Pack.Callables (#484), and "" for a drafted
+	// program.
+	Mode string
+
 	// Reasked marks a repeat of a draft that answered nothing which, being the model's first repeat of
 	// its turn, was sent back with the reason restated rather than ending the turn (#483). A host
 	// counts them to tell whether asking again helped.
@@ -261,7 +265,29 @@ func translate(ctx context.Context, question string, v *ns.Vocabulary, g Grounde
 	}
 	var last error
 	var held *Program // an answer escalated past, kept in case nothing better comes
-	mem := &memory{}  // what the actions have shown, across models, since it is about the data
+	if o.Pack != nil && len(o.Pack.Callables) > 0 {
+		p, prompt, ok, err := pickCall(ctx, ask, v, m, o, &tr, spend)
+		if err != nil {
+			return Program{}, tr, err
+		}
+		if ok {
+			p.Confidence = Confidence{Drawn: 1, Agreed: 1, Ran: o.Base != nil, Judged: o.Pack.Check != nil}
+			if o.Vote != nil {
+				conf := p.Confidence
+				po := o
+				po.FrontEnd = nil
+				p, tr.Votes = vote(ctx, m, prompt, p, v, po, spend)
+				conf.Drawn, conf.Agreed = p.Confidence.Drawn, p.Confidence.Agreed
+				p.Confidence = conf
+			}
+			if !(o.Escalate > 0 && p.Confidence.Agreement() < o.Escalate) {
+				return p, tr, nil
+			}
+			tr.Escalations = append(tr.Escalations, Escalation{Model: m.Name(), Text: p.Text, Confidence: p.Confidence})
+			held = &p
+		}
+	}
+	mem := &memory{} // what the actions have shown, across models, since it is about the data
 	compact := o.Actions != nil && o.Actions.Compact
 	for k, model := range models {
 		mem.facts, mem.last = nil, "" // a fallback starts a fresh conversation
