@@ -1249,9 +1249,10 @@ missions unblock a host's active mission; such a mission closes when the host's 
 passes too, so it can stay open after jaala's tickets close. Two are active: `mission_text_memory`
 (#437, below) and `mission_agent_frontend` (#322): a host's caller asks in plain language and jaala's
 front end turns it into a program that checks. Declaire's translator runs (declaire#288) reopened it
-with #482 to #485; since v0.1.90 jaala's model clients are chakra's (#487) and its agent loop moves onto
-chakra, jaala a helper a chakra agent plugs in (#490 the translator entry point, declaire#357 Declaire's
-move onto it). jaala's half is `frontends/nl` and `frontends/nlmodels`
+with #482 to #485 and #490, all closed by v0.1.91 (31/31): jaala's model clients are chakra's (#487),
+jaala a helper a chakra agent plugs in, with the translator entry point (#490), callable picks (#484),
+the re-ask (#483) and host prompt overrides (#485). It waits on Declaire: declaire#357 (the entry
+point), declaire#74 (its relations callable) and a rerun of its arms on declaire#288. jaala's half is `frontends/nl` and `frontends/nlmodels`
 (#321, #323 to #326, #330, #331, #336, #337, released in v0.1.66 and frontends/nlmodels/v0.1.66);
 `go test -run TestEval -v .` in `frontends/nl` is its jaala-side exercise (fix line 5/5). Declaire's
 translator-alone arm (declaire#295, for declaire#290) first ran on v0.1.66 and passed 2 of 14 on
