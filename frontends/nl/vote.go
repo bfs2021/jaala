@@ -28,7 +28,10 @@ type Vote struct {
 	Parallel bool
 }
 
-func (v *Vote) drafts() int {
+func (v *Vote) drafts() int { return v.Total() }
+
+// Total is how many answers the vote counts, the first included: Drafts, or 3 when it is 0.
+func (v *Vote) Total() int {
 	if v.Drafts > 0 {
 		return v.Drafts
 	}

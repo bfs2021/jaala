@@ -162,12 +162,12 @@ func TestAConversationAcceptsARepairOfWhatAnActionShowed(t *testing.T) {
 	}
 }
 
-// Compact holds what was noted and refused; a new conversation starts it afresh.
+// Compact holds each action taken and each refusal; a new conversation starts it afresh.
 func TestAConversationCompactsWhatItWasTold(t *testing.T) {
 	v, b := guide.Deps(t)
 	s, _ := nl.NewSession(context.Background(), mitQ, v, nil, nl.Options{Base: b, Actions: &nl.Actions{Compact: true}})
 	c := s.NewConversation(nil, true)
-	c.Noted("look pkg", "pkg(?id, ?license)")
+	c.Act(context.Background(), nl.ActionLook, "pkg")
 	c.Judge(context.Background(), reply(`pkg(?p, "nope") => ?p`))
 	got := c.Compact()
 	if len(got) != 1 || !strings.HasPrefix(got[0].Text, mitQ) || !strings.Contains(got[0].Text, "- look pkg") || !strings.Contains(got[0].Text, `refused (empty)`) {
@@ -227,5 +227,54 @@ func TestAPickStopsOnNone(t *testing.T) {
 	plain, _ := nl.NewSession(context.Background(), "q", v, nil, nl.Options{Pack: &nl.Pack{About: "a small graph"}})
 	if p, err := plain.Pick(); p != nil || err != nil {
 		t.Errorf("control: a pack without callables picks: %v %v", p, err)
+	}
+}
+
+// A conversation counts its actions: the same one asked twice opens with AskedAgain, the last one
+// MaxSteps allows ends with LastLook, and a new conversation starts the count again.
+func TestAConversationCountsItsActions(t *testing.T) {
+	v, b := guide.Deps(t)
+	d := nl.DefaultPrompts()
+	s, _ := nl.NewSession(context.Background(), mitQ, v, nil, nl.Options{Base: b, Actions: &nl.Actions{Steps: 2}})
+	c := s.NewConversation(nil, true)
+	first := c.Act(context.Background(), nl.ActionLook, "pkg")
+	if strings.HasPrefix(first, d.AskedAgain) || strings.HasSuffix(first, d.LastLook) || c.Steps() != 1 {
+		t.Errorf("first look %q, steps %d", first, c.Steps())
+	}
+	again := c.Act(context.Background(), nl.ActionLook, "pkg")
+	if again != d.AskedAgain+" "+first+"\n\n"+d.LastLook || c.Steps() != 2 {
+		t.Errorf("second look %q, steps %d", again, c.Steps())
+	}
+	if c := s.NewConversation(nil, true); c.Steps() != 0 || strings.HasPrefix(c.Act(context.Background(), nl.ActionLook, "pkg"), d.AskedAgain) {
+		t.Errorf("a new conversation carried the count")
+	}
+}
+
+// Tools are the actions to offer as tools, find only with a Grounder, values naming the front end's
+// target; with AsTools the prefix and grammar leave the text actions out. control: without AsTools
+// they're in.
+func TestASessionOffersItsActionsAsTools(t *testing.T) {
+	v := vocabulary(t)
+	g := &grounder{cands: []nl.Candidate{{Name: "a", Values: []string{"a"}}}}
+	s, _ := nl.NewSession(context.Background(), "q", v, g, nl.Options{Actions: &nl.Actions{AsTools: true}})
+	var names []string
+	for _, tl := range s.Tools() {
+		names = append(names, tl.Action+"("+tl.Arg+")")
+	}
+	if got := strings.Join(names, " "); got != "look(name) values(target) try(draft) find(name)" {
+		t.Errorf("tools %s", got)
+	}
+	if d := s.Tools()[1].Description; !strings.Contains(d, "relation.argument") {
+		t.Errorf("values' description %q", d)
+	}
+	if strings.Contains(s.Prefix(), "#   look NAME") || s.ActionGrammar() != s.Grammar() {
+		t.Errorf("AsTools left the text actions in")
+	}
+	plain, _ := nl.NewSession(context.Background(), "q", v, nil, nl.Options{Actions: &nl.Actions{}})
+	if len(plain.Tools()) != 3 || !strings.Contains(plain.Prefix(), "#   look NAME") || plain.ActionGrammar() == plain.Grammar() {
+		t.Errorf("control: without AsTools, %d tools", len(plain.Tools()))
+	}
+	if none, _ := nl.NewSession(context.Background(), "q", v, nil, nl.Options{}); none.Tools() != nil {
+		t.Errorf("tools without Actions")
 	}
 }

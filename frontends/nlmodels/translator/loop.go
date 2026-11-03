@@ -1,0 +1,581 @@
+package translator
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"sync"
+	"time"
+
+	agent "github.com/panyam/chakra"
+	"github.com/panyam/jaala/frontends/nl"
+)
+
+// A role is a Role as the loop runs it: the provider, the generation settings it can take, and
+// whether its answer is held to the grammar.
+type role struct {
+	label    string
+	provider agent.Provider
+	gen      agent.GenerationParams
+	think    string // the line a thinking model's prefix gains, "" for any other
+	guide    bool   // the provider takes a GBNF grammar and the model isn't thinking
+}
+
+// runtime is r with the role's defaults where r leaves them.
+func (r Role) runtime(label string, temp float64) *role {
+	if r.Label != "" {
+		label = r.Label
+	}
+	caps := agent.CapabilitiesOf(r.Provider)
+	rr := &role{label: label, provider: r.Provider, gen: agent.GenerationParams{MaxTokens: MaxTokens}}
+	if caps.Temperature {
+		if r.Temperature != nil {
+			temp = *r.Temperature
+		}
+		rr.gen.Temperature = &temp
+	}
+	switch {
+	case r.MaxTokens > 0:
+		rr.gen.MaxTokens = r.MaxTokens
+	case r.Thinking:
+		rr.gen.MaxTokens = ThinkingMaxTokens
+	}
+	if r.Thinking {
+		rr.think = r.ThinkPrompt
+		if rr.think == "" {
+			rr.think = DefaultThinkPrompt
+		}
+	}
+	rr.guide = !r.Thinking && caps.CanGuide(&agent.GuidedDecoding{Grammar: "root ::= \"x\""})
+	return rr
+}
+
+// guided is the grammar r's answers are held to, nil when it takes none or there is none.
+func (r *role) guided(grammar string) *agent.GuidedDecoding {
+	if !r.guide || grammar == "" {
+		return nil
+	}
+	return &agent.GuidedDecoding{Grammar: grammar}
+}
+
+// answer is the draft in a reply: a thinking model's last fenced block, or the reply.
+func (r *role) answer(text string) string {
+	if r.think != "" {
+		return programIn(text)
+	}
+	return text
+}
+
+// errLowAgreement ends a model's turn whose answer its vote disputed (nl.Options.Escalate).
+var errLowAgreement = errors.New("the drafts agreed too little on an answer")
+
+// run is one question: an nl.Session's pieces on chakra Runners (#496). It is nl.Translate's loop
+// with chakra doing the asking: a turn per model, each reply judged by the session's Conversation as
+// a TurnEnd hook, the actions as tools, a vote as an agent.Consensus, and the fallback a turn of its
+// own over a fresh conversation.
+func (t *Translator) run(ctx context.Context, question string) (nl.Program, nl.Trace, error) {
+	l := &loop{t: t, start: time.Now()}
+	o := t.opts
+	if o.Budget.Tokens > 0 {
+		ctx = agent.WithTreeBudget(ctx, agent.TreeBudget{MaxTokens: o.Budget.Tokens})
+	}
+	l.parent = ctx
+	if o.Budget.Time > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, o.Budget.Time)
+		defer cancel()
+	}
+	s, err := nl.NewSession(ctx, question, t.v, nil, o)
+	if err != nil {
+		return nl.Program{}, l.tr, err
+	}
+	roles := []*role{t.model}
+	if t.fallback != nil {
+		roles = append(roles, t.fallback)
+	}
+	var last error
+	var held *nl.Program // an answer escalated past, kept in case nothing better comes
+	pick, err := s.Pick()
+	if err != nil {
+		return nl.Program{}, l.tr, err
+	}
+	if pick != nil {
+		p, history, ok, err := l.pick(ctx, pick, t.model)
+		if err != nil {
+			return nl.Program{}, l.tr, err
+		}
+		if ok {
+			p.Confidence = nl.Confidence{Drawn: 1, Agreed: 1, Ran: o.Base != nil, Judged: o.Pack.Check != nil}
+			if o.Vote != nil {
+				if p, err = l.vote(ctx, pick, t.model, history, p); err != nil {
+					return nl.Program{}, l.tr, err
+				}
+			}
+			if !(o.Escalate > 0 && p.Confidence.Agreement() < o.Escalate) {
+				return p, l.tr, nil
+			}
+			l.tr.Escalations = append(l.tr.Escalations, nl.Escalation{Model: t.model.label, Text: p.Text, Confidence: p.Confidence})
+			held = &p
+		}
+	}
+	for k, r := range roles {
+		c := s.NewConversation(last, k == len(roles)-1)
+		p, history, err := l.turn(ctx, s, c, r)
+		if err != nil {
+			if !errors.Is(err, errTurnOver) {
+				return nl.Program{}, l.tr, err
+			}
+			last = l.stop
+			continue
+		}
+		p.Confidence = nl.Confidence{Drawn: 1, Agreed: 1, Ran: o.Base != nil, Judged: o.Pack != nil && o.Pack.Check != nil, Steps: c.Steps()}
+		if o.Vote != nil {
+			if p, err = l.vote(ctx, s, r, history, p); err != nil {
+				return nl.Program{}, l.tr, err
+			}
+		}
+		if o.Escalate > 0 && p.Confidence.Agreement() < o.Escalate && k < len(roles)-1 {
+			l.tr.Escalations = append(l.tr.Escalations, nl.Escalation{Model: r.label, Text: p.Text, Confidence: p.Confidence})
+			if held == nil {
+				held = &p
+			}
+			last = errLowAgreement
+			continue
+		}
+		return p, l.tr, nil
+	}
+	if held != nil {
+		return *held, l.tr, nil
+	}
+	return nl.Program{}, l.tr, fmt.Errorf("%w after %d tries: %w", nl.ErrNoProgram, len(l.tr.Tries), last)
+}
+
+// errTurnOver is a model's turn ending without an answer; loop.stop says why.
+var errTurnOver = errors.New("translator: the turn ended without an answer")
+
+// A loop is one question's run: the trace it builds and what it has spent.
+type loop struct {
+	t      *Translator
+	parent context.Context // the caller's context, under the token budget but not the time one
+	start  time.Time
+	mu     sync.Mutex // tools may run concurrently with each other
+	tr     nl.Trace
+	stop   error // why the last turn ended without an answer
+
+	recorded agent.Usage // the part of the current turn's usage already on a Try or Step
+	pending  agent.Usage // the last step's tokens, not yet on a Step
+	mark     time.Time   // when the last Try or Step was recorded, or the turn began
+}
+
+// turn asks r for an answer in conversation c: one Runner turn with the actions as tools, ended by
+// the Conversation's verdicts. It returns the accepted program and the history it was asked with,
+// errTurnOver when the turn ended without one (l.stop says why), or an error that ends the question.
+func (l *loop) turn(ctx context.Context, s *nl.Session, c *nl.Conversation, r *role) (nl.Program, []agent.Message, error) {
+	var accepted *nl.Program
+	l.stop = nil
+	cfg := agent.RunnerConfig{
+		Provider:       r.provider,
+		Instructions:   s.Prefix() + r.think,
+		MaxSteps:       s.MaxTries() + s.MaxSteps() + 1,
+		Generation:     r.gen,
+		ResponseGuided: r.guided(s.Grammar()),
+		TurnEnd: []agent.TurnEndHook{func(ctx context.Context, info agent.TurnEndInfo) (agent.TurnEndVerdict, error) {
+			if err := l.timeUp(ctx); err != nil {
+				return agent.TurnEndVerdict{}, err
+			}
+			vd := c.Judge(ctx, l.try(r, r.answer(info.Text), info.Usage))
+			l.tr.Tries = append(l.tr.Tries, vd.Tries...)
+			switch {
+			case vd.Program != nil:
+				accepted = vd.Program
+				return agent.TurnEndVerdict{}, nil
+			case vd.Stop != nil:
+				l.stop = vd.Stop
+				return agent.TurnEndVerdict{Stop: vd.Stop.Error()}, nil
+			}
+			return agent.TurnEndVerdict{Continue: vd.Continue, AsUser: true}, nil
+		}},
+		StepStages: l.stages(s, c, r),
+	}
+	if tools := s.Tools(); tools != nil {
+		cfg.Tools = l.tools(tools, c, r)
+	}
+	history := []agent.Message{{Role: agent.RoleUser, Text: c.Ask()}}
+	res, err := l.runTurn(ctx, cfg, r, "", agent.TurnRequest{History: history})
+	if err != nil {
+		return nl.Program{}, nil, err
+	}
+	if accepted == nil {
+		return nl.Program{}, nil, errTurnOver
+	}
+	if l.t.opts.Actions != nil && l.t.opts.Actions.Compact {
+		var asked []agent.Message
+		for _, t := range c.Compact() {
+			asked = append(asked, agent.Message{Role: agent.RoleUser, Text: t.Text})
+		}
+		return *accepted, asked, nil
+	}
+	return *accepted, answered(append(history, res.Messages...)), nil
+}
+
+// runTurn runs one turn on a Runner over cfg, counting its tokens. A turn the Conversation stopped,
+// or that ran out of steps, is errTurnOver; a failed model call is a Try of kind model and
+// errTurnOver too; the budget running out is an *nl.BudgetSpent; anything else ends the question.
+func (l *loop) runTurn(ctx context.Context, cfg agent.RunnerConfig, r *role, mode string, req agent.TurnRequest) (*agent.TurnResult, error) {
+	runner, err := agent.NewRunner(cfg)
+	if err != nil {
+		return nil, err
+	}
+	l.recorded, l.pending, l.mark = agent.Usage{}, agent.Usage{}, time.Now()
+	req.Emit = l.emit
+	res, err := runner.RunTurn(ctx, req)
+	switch {
+	case err == nil:
+		return res, nil
+	case errors.Is(err, agent.ErrTurnStopped):
+		return res, errTurnOver
+	case errors.Is(err, agent.ErrMaxSteps):
+		if l.stop == nil {
+			l.stop = err
+		}
+		return res, errTurnOver
+	case errors.Is(err, agent.ErrTreeBudget), l.parent.Err() == nil && ctx.Err() != nil:
+		return res, l.spentAll()
+	case ctx.Err() != nil:
+		return res, ctx.Err()
+	}
+	l.stop = fmt.Errorf("model %s: %w", r.label, err)
+	try := nl.Try{Model: r.label, Err: err, Kind: nl.KindModel, Mode: mode, Latency: time.Since(l.mark)}
+	if mode == "" {
+		try.Language = l.language()
+	} else {
+		try.Err = l.stop
+	}
+	l.tr.Tries = append(l.tr.Tries, try)
+	return res, errTurnOver
+}
+
+// spentAll is the BudgetSpent the question ends with: the tokens every Try, Step and vote carried.
+func (l *loop) spentAll() *nl.BudgetSpent {
+	n := 0
+	for _, ts := range [][]nl.Try{l.tr.Tries, l.tr.Votes} {
+		for _, t := range ts {
+			n += t.TokensIn + t.TokensOut
+		}
+	}
+	for _, st := range l.tr.Steps {
+		n += st.TokensIn + st.TokensOut
+	}
+	return &nl.BudgetSpent{Budget: l.t.opts.Budget, Tokens: n, Elapsed: time.Since(l.start)}
+}
+
+// timeUp is the time budget's error once it has run out while the caller's context hasn't, nil
+// before: nothing more is asked or judged then, as nl's Translate checks before each call.
+func (l *loop) timeUp(ctx context.Context) error {
+	if l.parent.Err() == nil && ctx.Err() != nil {
+		return ctx.Err()
+	}
+	return nil
+}
+
+// language is the front end's language, "" for jaala's.
+func (l *loop) language() string {
+	if fe := l.t.opts.FrontEnd; fe != nil {
+		return fe.Language()
+	}
+	return ""
+}
+
+// emit keeps each step's tokens until a Step or Try takes them.
+func (l *loop) emit(e agent.Event) {
+	if e.Kind == agent.EventStep && e.Usage != nil {
+		l.mu.Lock()
+		l.pending = add(l.pending, *e.Usage)
+		l.mu.Unlock()
+	}
+}
+
+// try is the reply text as a Try from r, carrying the tokens the turn spent since the last Try or
+// Step (the reply's own call, and a guided call that rewrote it).
+func (l *loop) try(r *role, text string, turn agent.Usage) nl.Try {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	u := sub(turn, l.recorded)
+	l.recorded, l.pending = turn, agent.Usage{}
+	now := time.Now()
+	try := nl.Try{Model: r.label, Text: text, TokensIn: u.InputTokens, TokensOut: u.OutputTokens, TokensCached: u.CachedInputTokens, Latency: now.Sub(l.mark)}
+	l.mark = now
+	return try
+}
+
+// stages name each call for the turn's usage, stop offering the actions once the model has taken
+// MaxSteps of them, and send Compact's one message in place of the conversation when Actions.Compact
+// asks for it. Compacting is a turn stage, since it rewrites the working messages, which chakra's
+// guided finalizing call reads too; a request stage's messages reach only the step's own call.
+func (l *loop) stages(s *nl.Session, c *nl.Conversation, r *role) []agent.StepStage {
+	st := []agent.StepStage{{Name: "jaala.translator", Scope: agent.ScopeRequest, Run: func(ctx context.Context, _ agent.StepInfo, v agent.StepView) (agent.StepView, error) {
+		if err := l.timeUp(ctx); err != nil {
+			return v, err
+		}
+		v.ProviderName = r.label
+		l.mu.Lock()
+		out := c.Steps() >= s.MaxSteps()
+		l.mu.Unlock()
+		if out {
+			v.Tools = nil
+		}
+		return v, nil
+	}}}
+	if l.t.opts.Actions != nil && l.t.opts.Actions.Compact {
+		st = append(st, agent.StepStage{Name: "jaala.translator.compact", Scope: agent.ScopeTurn, Run: func(_ context.Context, _ agent.StepInfo, v agent.StepView) (agent.StepView, error) {
+			l.mu.Lock()
+			defer l.mu.Unlock()
+			v.Messages = nil
+			for _, t := range c.Compact() {
+				v.Messages = append(v.Messages, agent.Message{Role: agent.RoleUser, Text: t.Text})
+			}
+			return v, nil
+		}})
+	}
+	return st
+}
+
+// The arguments of the action tools, one text each.
+type (
+	nameArg struct {
+		Name string `json:"name"`
+	}
+	targetArg struct {
+		Target string `json:"target"`
+	}
+	draftArg struct {
+		Draft string `json:"draft"`
+	}
+)
+
+// tools are the session's actions as chakra tools, each a Step in the Trace.
+func (l *loop) tools(ts []nl.Tool, c *nl.Conversation, r *role) agent.ToolSource {
+	src := agent.NewFuncSource()
+	act := func(ctx context.Context, action, arg string) string {
+		l.mu.Lock()
+		defer l.mu.Unlock()
+		result := c.Act(ctx, action, arg)
+		u := l.pending
+		l.recorded, l.pending = add(l.recorded, u), agent.Usage{}
+		now := time.Now()
+		l.tr.Steps = append(l.tr.Steps, nl.Step{Model: r.label, Action: action, Text: nl.ActionText(action, arg), Result: result, After: len(l.tr.Tries),
+			TokensIn: u.InputTokens, TokensOut: u.OutputTokens, TokensCached: u.CachedInputTokens, Latency: now.Sub(l.mark)})
+		l.mark = now
+		return result
+	}
+	for _, t := range ts {
+		var err error
+		switch t.Action {
+		case nl.ActionValues:
+			err = agent.AddFunc(src, t.Action, t.Description, func(ctx context.Context, in targetArg) (string, error) {
+				return act(ctx, nl.ActionValues, in.Target), nil
+			}, agent.ReadOnly())
+		case nl.ActionTry:
+			err = agent.AddFunc(src, t.Action, t.Description, func(ctx context.Context, in draftArg) (string, error) {
+				return act(ctx, nl.ActionTry, in.Draft), nil
+			}, agent.ReadOnly())
+		default:
+			action := t.Action
+			err = agent.AddFunc(src, action, t.Description, func(ctx context.Context, in nameArg) (string, error) {
+				return act(ctx, action, in.Name), nil
+			}, agent.ReadOnly())
+		}
+		if err != nil {
+			panic("translator: registering " + t.Action + ": " + err.Error()) // the names are fixed and distinct
+		}
+	}
+	return src
+}
+
+// answered is what a vote's draws are asked: the turn's record up to the accepted answer, each tool
+// call written as the reply that would have asked for it and each result as the user's next turn, so
+// a draw needs no tools offered (a provider may refuse tool messages in a request offering none).
+func answered(record []agent.Message) []agent.Message {
+	if n := len(record); n > 0 && record[n-1].Role == agent.RoleAssistant && len(record[n-1].ToolCalls) == 0 {
+		record = record[:n-1]
+	}
+	var out []agent.Message
+	for _, m := range record {
+		switch {
+		case m.Role == agent.RoleAssistant && len(m.ToolCalls) > 0:
+			for _, tc := range m.ToolCalls {
+				out = append(out, agent.Message{Role: agent.RoleAssistant, Text: nl.ActionText(tc.Name, toolArg(tc))})
+			}
+		case m.Role == agent.RoleTool:
+			out = append(out, agent.Message{Role: agent.RoleUser, Text: m.Text})
+		default:
+			out = append(out, agent.Message{Role: m.Role, Text: m.Text})
+		}
+	}
+	return out
+}
+
+// toolArg is a tool call's one text argument, "" when it has none.
+func toolArg(tc agent.ToolCall) string {
+	var args map[string]any
+	if json.Unmarshal(tc.Args.Raw(), &args) != nil {
+		return ""
+	}
+	for _, v := range args {
+		if s, ok := v.(string); ok {
+			return s
+		}
+	}
+	return ""
+}
+
+// vote draws more answers to what first answered, from history, as nl's Options.Vote does: an
+// agent.Consensus with first as its prior, each draw one guided call with no tools, judged and keyed
+// by the session. It returns the program most draws agree with, first among equals, with Confidence's
+// Drawn and Agreed from the vote, and adds each draw to the Trace's Votes.
+func (l *loop) vote(ctx context.Context, s *nl.Session, r *role, history []agent.Message, first nl.Program) (nl.Program, error) {
+	vt := l.t.opts.Vote
+	runner, err := agent.NewRunner(agent.RunnerConfig{
+		Provider:       r.provider,
+		Instructions:   s.Prefix() + r.think,
+		MaxSteps:       1,
+		Generation:     r.gen,
+		ResponseGuided: r.guided(s.Grammar()),
+		StepStages: []agent.StepStage{{Name: "jaala.translator.vote", Scope: agent.ScopeRequest, Run: func(ctx context.Context, _ agent.StepInfo, v agent.StepView) (agent.StepView, error) {
+			if err := l.timeUp(ctx); err != nil {
+				return v, err
+			}
+			v.ProviderName = r.label
+			return v, nil
+		}}},
+	})
+	if err != nil {
+		return nl.Program{}, err
+	}
+	prior := &agent.TurnResult{Text: first.Text}
+	var mu sync.Mutex
+	drawn := map[*agent.TurnResult]struct {
+		try  nl.Try
+		prog nl.Program
+	}{}
+	parallel := 1
+	if vt.Parallel {
+		parallel = vt.Total() - 1
+	}
+	cons := agent.Consensus{Runner: runner, Draws: vt.Total() - 1, Prior: []*agent.TurnResult{prior}, Parallel: parallel,
+		Key: func(res *agent.TurnResult) (string, bool) {
+			if res == prior {
+				return s.Key(first), true
+			}
+			u := res.Usage
+			try, p, err := s.Draw(ctx, nl.Try{Model: r.label, Text: r.answer(res.Text), TokensIn: u.InputTokens, TokensOut: u.OutputTokens, TokensCached: u.CachedInputTokens})
+			mu.Lock()
+			drawn[res] = struct {
+				try  nl.Try
+				prog nl.Program
+			}{try, p}
+			mu.Unlock()
+			if err != nil {
+				return "", false
+			}
+			return s.Key(p), true
+		}}
+	res, err := cons.Run(ctx, agent.TurnRequest{History: history})
+	if err != nil {
+		return nl.Program{}, err
+	}
+	won := first
+	for _, d := range res.Draws {
+		if d.Prior {
+			continue
+		}
+		switch {
+		case d.Result != nil:
+			l.tr.Votes = append(l.tr.Votes, drawn[d.Result].try)
+		case d.Err != "" && (res.Stopped == nil || d.Err != res.Stopped.Error()):
+			l.tr.Votes = append(l.tr.Votes, nl.Try{Model: r.label, Language: l.language(), Err: errors.New(d.Err), Kind: nl.KindModel})
+		}
+	}
+	if res.Winner != nil && res.Winner != prior {
+		won = drawn[res.Winner].prog
+	}
+	won.Confidence = first.Confidence
+	won.Confidence.Drawn, won.Confidence.Agreed = 1+len(l.drawnIn(res)), res.Agree
+	return won, nil
+}
+
+// drawnIn are the vote's draws that were asked, the failed included and the unstarted left out, as
+// nl's vote counts them.
+func (l *loop) drawnIn(res *agent.ConsensusResult) []agent.DrawResult {
+	var out []agent.DrawResult
+	for _, d := range res.Draws {
+		if !d.Prior && (d.Result != nil || d.Err != "" && (res.Stopped == nil || d.Err != res.Stopped.Error())) {
+			out = append(out, d)
+		}
+	}
+	return out
+}
+
+// pick asks r to pick one of the pack's Callables (#484), as nl's Translate does first: a turn over
+// the pick's Session, judged by its Conversation. ok is false when the model replied none, failed, or
+// had no pick accepted, and the question is then drafted.
+func (l *loop) pick(ctx context.Context, pick *nl.Session, r *role) (nl.Program, []agent.Message, bool, error) {
+	c := pick.NewConversation(nil, true)
+	var accepted *nl.Program
+	cfg := agent.RunnerConfig{
+		Provider:       r.provider,
+		Instructions:   pick.Prefix() + r.think,
+		MaxSteps:       pick.MaxTries() + 1,
+		Generation:     r.gen,
+		ResponseGuided: r.guided(pick.Grammar()),
+		TurnEnd: []agent.TurnEndHook{func(ctx context.Context, info agent.TurnEndInfo) (agent.TurnEndVerdict, error) {
+			if err := l.timeUp(ctx); err != nil {
+				return agent.TurnEndVerdict{}, err
+			}
+			try := l.try(r, r.answer(info.Text), info.Usage)
+			vd := c.Judge(ctx, try)
+			switch {
+			case errors.Is(vd.Stop, nl.ErrNoCall):
+				l.tr.Steps = append(l.tr.Steps, nl.Step{Model: r.label, Action: nl.ActionNone, Text: try.Text, Result: "no relation answers it: drafting a program",
+					After: len(l.tr.Tries), TokensIn: try.TokensIn, TokensOut: try.TokensOut, TokensCached: try.TokensCached, Latency: try.Latency})
+				return agent.TurnEndVerdict{Stop: vd.Stop.Error()}, nil
+			case vd.Program != nil:
+				l.tr.Tries = append(l.tr.Tries, vd.Tries...)
+				accepted = vd.Program
+				return agent.TurnEndVerdict{}, nil
+			case vd.Stop != nil:
+				l.tr.Tries = append(l.tr.Tries, vd.Tries...)
+				return agent.TurnEndVerdict{Stop: vd.Stop.Error()}, nil
+			}
+			l.tr.Tries = append(l.tr.Tries, vd.Tries...)
+			return agent.TurnEndVerdict{Continue: vd.Continue, AsUser: true}, nil
+		}},
+		StepStages: []agent.StepStage{{Name: "jaala.translator.pick", Scope: agent.ScopeRequest, Run: func(ctx context.Context, _ agent.StepInfo, v agent.StepView) (agent.StepView, error) {
+			if err := l.timeUp(ctx); err != nil {
+				return v, err
+			}
+			v.ProviderName = r.label
+			return v, nil
+		}}},
+	}
+	history := []agent.Message{{Role: agent.RoleUser, Text: c.Ask()}}
+	res, err := l.runTurn(ctx, cfg, r, nl.ModeCall, agent.TurnRequest{History: history})
+	switch {
+	case errors.Is(err, errTurnOver):
+		return nl.Program{}, nil, false, nil
+	case err != nil:
+		return nl.Program{}, nil, false, err
+	case accepted == nil:
+		return nl.Program{}, nil, false, nil
+	}
+	return *accepted, answered(append(history, res.Messages...)), true, nil
+}
+
+func add(a, b agent.Usage) agent.Usage {
+	return agent.Usage{InputTokens: a.InputTokens + b.InputTokens, OutputTokens: a.OutputTokens + b.OutputTokens, CachedInputTokens: a.CachedInputTokens + b.CachedInputTokens}
+}
+
+func sub(a, b agent.Usage) agent.Usage {
+	return agent.Usage{InputTokens: a.InputTokens - b.InputTokens, OutputTokens: a.OutputTokens - b.OutputTokens, CachedInputTokens: a.CachedInputTokens - b.CachedInputTokens}
+}

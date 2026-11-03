@@ -211,7 +211,7 @@ const instructions = `
 // *Abstained instead.
 func Translate(ctx context.Context, question string, v *ns.Vocabulary, g Grounder, m Model, o Options) (Program, Trace, error) {
 	p, tr, err := translate(ctx, question, v, g, m, o)
-	return o.Abstain.judge(p, tr, err)
+	return o.Abstain.Judge(p, tr, err)
 }
 
 func translate(ctx context.Context, question string, v *ns.Vocabulary, g Grounder, m Model, o Options) (Program, Trace, error) {
@@ -251,13 +251,10 @@ func translate(ctx context.Context, question string, v *ns.Vocabulary, g Grounde
 			held = &p
 		}
 	}
-	pr := s.pr
 	compact := o.Actions != nil && o.Actions.Compact
 	for k, model := range models {
 		c := s.NewConversation(last, k == len(models)-1)
 		turns := []Turn{{RoleUser, c.Ask()}}
-		asked := map[string]bool{}
-		steps := 0
 	turn:
 		for {
 			if err := ctx.Err(); err != nil {
@@ -266,8 +263,8 @@ func translate(ctx context.Context, question string, v *ns.Vocabulary, g Grounde
 			if err := spend.check(); err != nil {
 				return Program{}, tr, err
 			}
-			grammar, acting := s.ActionGrammar(), o.Actions != nil
-			if acting && steps >= s.MaxSteps() {
+			grammar, acting := s.ActionGrammar(), o.Actions.replies()
+			if acting && c.Steps() >= s.MaxSteps() {
 				grammar, acting = s.Grammar(), false // out of steps: the next reply is the answer
 			}
 			sent := turns
@@ -287,18 +284,9 @@ func translate(ctx context.Context, question string, v *ns.Vocabulary, g Grounde
 			if acting {
 				if action, arg, ok := readAction(unfence(try.Text)); ok {
 					text := unfence(try.Text)
-					result := s.Act(ctx, action, arg)
-					if asked[text] {
-						result = pr.AskedAgain + " " + result
-					}
-					asked[text] = true
-					steps++
-					if steps == s.MaxSteps() {
-						result += "\n\n" + pr.LastLook
-					}
+					result := c.Act(ctx, action, arg)
 					tr.Steps = append(tr.Steps, Step{Model: try.Model, Action: action, Text: text, Result: result, After: len(tr.Tries),
 						TokensIn: try.TokensIn, TokensOut: try.TokensOut, TokensCached: try.TokensCached, Latency: try.Latency})
-					c.Noted(text, result)
 					turns = append(turns, Turn{RoleModel, text}, Turn{RoleUser, result})
 					continue
 				}
@@ -308,7 +296,7 @@ func translate(ctx context.Context, question string, v *ns.Vocabulary, g Grounde
 			switch {
 			case vd.Program != nil:
 				p := *vd.Program
-				p.Confidence = Confidence{Drawn: 1, Agreed: 1, Ran: o.Base != nil, Judged: o.Pack != nil && o.Pack.Check != nil, Steps: steps}
+				p.Confidence = Confidence{Drawn: 1, Agreed: 1, Ran: o.Base != nil, Judged: o.Pack != nil && o.Pack.Check != nil, Steps: c.Steps()}
 				if o.Vote != nil {
 					var votes []Try
 					conf := p.Confidence
@@ -337,7 +325,7 @@ func translate(ctx context.Context, question string, v *ns.Vocabulary, g Grounde
 	if held != nil {
 		return *held, tr, nil
 	}
-	return Program{}, tr, fmt.Errorf("%w after %d tries: %w", errNoProgram, len(tr.Tries), last)
+	return Program{}, tr, fmt.Errorf("%w after %d tries: %w", ErrNoProgram, len(tr.Tries), last)
 }
 
 // complete asks model once, timing it, and returns its reply as a Try that carries what it cost. A
@@ -386,7 +374,7 @@ func promptPrefix(v *ns.Vocabulary, o Options) (string, error) {
 			return "", err
 		}
 		prefix := card + o.Pack.prompts().Instructions
-		if o.Actions != nil {
+		if o.Actions.replies() {
 			prefix += actionsPrefix(nil, o.grounder != nil, o.Pack.prompts())
 		}
 		if o.Pack != nil {
@@ -416,7 +404,7 @@ func promptPrefix(v *ns.Vocabulary, o Options) (string, error) {
 		instr = s
 	}
 	prefix := card + instr
-	if o.Actions != nil {
+	if o.Actions.replies() {
 		prefix += actionsPrefix(fe, o.grounder != nil, o.Pack.prompts())
 	}
 	if o.Pack != nil {

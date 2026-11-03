@@ -68,7 +68,7 @@ func NewSession(ctx context.Context, question string, v *ns.Vocabulary, g Ground
 		return nil, err
 	}
 	s.grammar = s.answerGrammar
-	if o.Actions != nil {
+	if o.Actions.replies() {
 		s.grammar = actionGrammar(s.grammar, g != nil)
 	}
 	return s, nil
@@ -171,13 +171,15 @@ type Conversation struct {
 	why     map[string]string // what each refused draft was told, in its own language
 	reasked bool              // a repeated empty draft was asked again (#483)
 	tries   int
+	steps   int             // actions taken
+	asked   map[string]bool // each action taken, as action and argument
 }
 
 // NewConversation starts a model's turn. after is why the previous model's turn ended, nil for the
 // first, and last says no model follows this one: an empty answer then goes back to this model
 // rather than ending its turn.
 func (s *Session) NewConversation(after error, last bool) *Conversation {
-	c := &Conversation{s: s, ask: s.ask, last: last, refused: map[string]error{}, why: map[string]string{}}
+	c := &Conversation{s: s, ask: s.ask, last: last, refused: map[string]error{}, why: map[string]string{}, asked: map[string]bool{}}
 	if !s.pick {
 		s.mem.facts, s.mem.last = nil, ""
 		if after != nil && errors.Is(after, errEmpty) {
@@ -195,9 +197,65 @@ func (c *Conversation) Ask() string { return c.ask }
 // what the actions found, each refused answer on a line, and the last refusal whole.
 func (c *Conversation) Compact() []Turn { return c.s.mem.compact(c.ask) }
 
-// Noted records an action the model took and what it was told, for Compact.
-func (c *Conversation) Noted(reply, result string) {
-	c.s.mem.facts = append(c.s.mem.facts, fact(reply, result))
+// Act runs an action this conversation's model asked for and returns what goes back to it: the
+// Session's Act, opened with Prompts.AskedAgain when the model asked the same before, and ended with
+// Prompts.LastLook when it was the last MaxSteps allows. It is kept for Compact as the reply that
+// would have asked for it ("values pkg.license"). Steps counts it, and the caller stops offering
+// actions once Steps reaches MaxSteps.
+func (c *Conversation) Act(ctx context.Context, action, arg string) string {
+	s := c.s
+	result := s.Act(ctx, action, arg)
+	key := action + "\x00" + arg
+	if c.asked[key] {
+		result = s.pr.AskedAgain + " " + result
+	}
+	c.asked[key] = true
+	c.steps++
+	if c.steps == s.MaxSteps() {
+		result += "\n\n" + s.pr.LastLook
+	}
+	s.mem.facts = append(s.mem.facts, fact(ActionText(action, arg), result))
+	return result
+}
+
+// Steps is how many actions the conversation's model has taken.
+func (c *Conversation) Steps() int { return c.steps }
+
+// ActionText is the reply that asks for an action, as a model writes one when actions come in its
+// reply (look NAME, values TARGET, find NAME, or try then the draft on the next lines).
+func ActionText(action, arg string) string {
+	if action == ActionTry {
+		return ActionTry + "\n" + arg
+	}
+	return action + " " + arg
+}
+
+// A Tool is one action as a tool an agent framework offers the model (Actions.AsTools): the action
+// is its name, and it takes one text argument.
+type Tool struct {
+	Action, Arg, Description string
+}
+
+// Tools are the session's actions as tools, nil without Options.Actions: look, values and try, and
+// find when the question has a Grounder. Their descriptions are the pack's Prompts (ToolLook,
+// ToolValues, ToolTry, ToolFind), values naming a target as the model's language writes one.
+func (s *Session) Tools() []Tool {
+	if s.o.Actions == nil {
+		return nil
+	}
+	target := "relation.argument"
+	if p, ok := s.o.FrontEnd.(Prober); ok {
+		target = p.ValuesTarget()
+	}
+	ts := []Tool{
+		{ActionLook, "name", s.pr.ToolLook},
+		{ActionValues, "target", fmt.Sprintf(s.pr.ToolValues, target)},
+		{ActionTry, "draft", s.pr.ToolTry},
+	}
+	if s.o.grounder != nil {
+		ts = append(ts, Tool{ActionFind, "name", s.pr.ToolFind})
+	}
+	return ts
 }
 
 // A Verdict is what a Conversation makes of one reply. Exactly one of Program, Continue and Stop is

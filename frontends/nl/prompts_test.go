@@ -19,6 +19,10 @@ func hostPrompts() *nl.Prompts {
 		Find:                 "H-FIND",
 		AskedAgain:           "H-ASKED",
 		LastLook:             "H-LAST",
+		ToolLook:             "H-TOOLLOOK",
+		ToolValues:           "H-TOOLVALUES %s",
+		ToolTry:              "H-TOOLTRY",
+		ToolFind:             "H-TOOLFIND",
 		Fix:                  "H-FIX %s",
 		FixEmpty:             "H-FIXEMPTY %s",
 		EmptyFallback:        "H-EMPTYFALLBACK",
@@ -107,6 +111,15 @@ func TestAPacksPromptsReplaceJaalasText(t *testing.T) {
 		if _, tr, _ := nl.Translate(ctx, "q", v, c.g, ctl, o); c.check(ctl, tr) == "" {
 			t.Errorf("%s: control: jaala's own text passed the check", c.name)
 		}
+	}
+
+	tools, _ := nl.NewSession(ctx, "q", v, g, nl.Options{Actions: &nl.Actions{AsTools: true}, Pack: with(&nl.Pack{}, hostPrompts())})
+	var descs []string
+	for _, tl := range tools.Tools() {
+		descs = append(descs, tl.Description)
+	}
+	if got := strings.Join(descs, "|"); got != "H-TOOLLOOK|H-TOOLVALUES relation.argument|H-TOOLTRY|H-TOOLFIND" {
+		t.Errorf("the tools' descriptions: %s", got)
 	}
 
 	small, big := model("small", `edge("zz", ?b) => ?b`), model("big", `edge("a", ?b) => ?b`)

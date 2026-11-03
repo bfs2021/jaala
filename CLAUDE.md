@@ -149,9 +149,21 @@ GOARCH=wasm go test ./ns` (#417 ran `ns` that way).
   `NewSession` writes the prefix, grounds and picks the grammar, `Act` runs an action, `Draw` and `Key`
   judge and key a vote's draw, `Pick` is the callables' first step, and a `Conversation` per model
   judges each reply into a `Verdict` (the accepted `Program`, `Continue` with what to tell the model,
-  or `Stop`), shaped like chakra's `TurnEndVerdict` without importing it. The loop keeps only calling
-  the Model, the step cap, the vote, escalation, the budget and `Abstain`; #496's second PR moves those
-  onto a chakra Runner in `nlmodels/translator`. A change to how a reply is judged goes in `session.go`.
+  or `Stop`), shaped like chakra's `TurnEndVerdict` without importing it. `Conversation.Act` counts
+  the actions (`AskedAgain`, `LastLook`), and `Session.Tools` describes them for a loop offering them
+  as tools (`Actions.AsTools`, `Prompts.ToolLook` and its siblings). A change to how a reply is judged
+  goes in `session.go`, where both loops get it. `nlmodels/translator`'s `Ask` runs the same Session on
+  chakra Runners (`loop.go`, #496): a turn per model, `Conversation.Judge` as its `TurnEnd` hook
+  (`Continue` with `AsUser`), the actions a `FuncSource` that a request stage drops once `MaxSteps` are
+  used, compaction a turn stage (chakra's guided finalizing call reads the working messages, never a
+  request stage's), a vote an `agent.Consensus` with the accepted answer as its `Prior` and the
+  conversation flattened to text (`answered`), the time budget checked in each stage and hook, and a
+  Try's tokens what the turn spent since the last Try or Step. `differential_test.go` holds it to
+  `nl.Translate` over TestEval's and TestEvalCallable's scripts and arms for actions, a repair,
+  compaction, votes, escalation and a failing model: the same outcomes, and on the arms without
+  actions the same requests word for word. A loop change that the differential can't see needs a
+  test of its own (`loop_test.go`), and `server_test.go` runs the loop on selfcheck's `llama-server`,
+  whose 1 MB model caps a slot at 2048 tokens, so its vocabulary leaves out stdlib.
 - **`nl.Grammar()` is GBNF built from a rule table** (`frontends/nl/grammar.go`, #323), and every text it
   accepts must parse: `TestEveryProgramTheGrammarWritesParses` samples 21,000 programs from the table
   over 70 seeds and every depth (one seed alone missed `-(9)` as a column). The other direction lives

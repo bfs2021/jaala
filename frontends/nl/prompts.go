@@ -29,6 +29,10 @@ type Prompts struct {
 	AskedAgain string
 	// LastLook ends the last action's result the model may ask for.
 	LastLook string
+	// ToolLook, ToolValues, ToolTry and ToolFind describe the actions when they are offered as tools
+	// (Actions.AsTools, Session.Tools). ToolValues' placeholder is the values target, as the model's
+	// language writes one.
+	ToolLook, ToolValues, ToolTry, ToolFind string
 	// Fix ends a refused draft's feedback. Placeholder: "program", or "query" under a front end.
 	Fix string
 	// FixEmpty ends the feedback of a draft that answered nothing. Placeholder as Fix.
@@ -62,6 +66,10 @@ func DefaultPrompts() Prompts {
 		Find:          findInstruction,
 		AskedAgain:    "You asked that already.",
 		LastLook:      "That was the last look: reply with your answer.",
+		ToolLook:      "What a relation, module or label holds: its arguments and what they mean. name is the relation, module or label.",
+		ToolValues:    "Some of the values one argument or property holds. target is one, such as %s.",
+		ToolTry:       "Run a draft on a few rows and see its rows, or why none came back. It isn't your answer: reply with that once it is right.",
+		ToolFind:      "The ids or values a name from the question may stand for. name is that name.",
 		Fix:           "Write the whole %s again, fixed.",
 		FixEmpty:      "Write the whole %s again, with other members or values.",
 		EmptyFallback: "A program written for this answered nothing; the question may need other members or values.",
@@ -87,7 +95,8 @@ func (p *Pack) prompts() Prompts {
 	h := *p.Prompts
 	for _, f := range []struct{ host, def *string }{
 		{&h.Instructions, &d.Instructions}, {&h.Actions, &d.Actions}, {&h.Find, &d.Find},
-		{&h.AskedAgain, &d.AskedAgain}, {&h.LastLook, &d.LastLook}, {&h.Fix, &d.Fix}, {&h.FixEmpty, &d.FixEmpty},
+		{&h.AskedAgain, &d.AskedAgain}, {&h.LastLook, &d.LastLook}, {&h.ToolLook, &d.ToolLook},
+		{&h.ToolValues, &d.ToolValues}, {&h.ToolTry, &d.ToolTry}, {&h.ToolFind, &d.ToolFind}, {&h.Fix, &d.Fix}, {&h.FixEmpty, &d.FixEmpty},
 		{&h.EmptyFallback, &d.EmptyFallback}, {&h.Reask, &d.Reask}, {&h.Grounded, &d.Grounded},
 		{&h.Pick, &d.Pick}, {&h.PickRetry, &d.PickRetry}, {&h.CompactFound, &d.CompactFound},
 		{&h.CompactRefused, &d.CompactRefused}, {&h.Extract, &d.Extract}, {&h.ExtractFix, &d.ExtractFix},
@@ -108,7 +117,7 @@ func (t Prompts) templates() []struct {
 	return []struct {
 		name, text string
 		n          int
-	}{{"Actions", t.Actions, 2}, {"Fix", t.Fix, 1}, {"FixEmpty", t.FixEmpty, 1}, {"Reask", t.Reask, 4}}
+	}{{"Actions", t.Actions, 2}, {"ToolValues", t.ToolValues, 1}, {"Fix", t.Fix, 1}, {"FixEmpty", t.FixEmpty, 1}, {"Reask", t.Reask, 4}}
 }
 
 // checkTemplates refuses a template that drops one of its placeholders or reads one it isn't given:
