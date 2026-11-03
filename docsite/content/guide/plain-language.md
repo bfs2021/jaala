@@ -127,6 +127,7 @@ The card says what a program can call, but not what the data holds or what a que
 - `Examples` are questions with the programs that answer them, one or two per construct. How to call one relation belongs in its doc instead.
 - `Grounder` grounds the question when `Translate` is given none.
 - `Check` judges an answer that checked and ran: an error refuses the draft as `answer` and goes back to the same model with its text, as a check error does. It's for what makes an answer suspect in the domain, such as every value absent, or a hundred rows for a question asking for one.
+- `Callables` lists relations that answer a question on their own once their arguments are filled, which `Translate` asks the model to pick from before it drafts ([below](#answering-with-one-call)).
 - `Hint` says what your data holds where an empty answer matched nothing. It gets `Report.Empty`, with the culprit's `Relation` and `Args`, and returns text such as `no node kind "entity"; the kinds are package, func, type`. `Translate` adds it to the empty draft's feedback after jaala's own explanation, and the MCP server to an empty answer of `query`, `cypher` and `explain` ([#430](https://github.com/panyam/jaala/issues/430)). It runs once per empty answer, so keep it to a few lookups.
 
 The pack's part goes after the card and the instructions, `About` and the examples as comments, so the prefix is still the same for every question and stays cached. `Translate` checks every example against the vocabulary before asking a model, and fails naming the first that doesn't check, so a pack can't teach a model a relation the vocabulary lacks. A host's test can call `Pack.Validate` and `Pack.Prefix` itself. Here `DataCard` writes the guide's data, and a pack whose `Check` expects one package refuses a first draft answering three:
@@ -134,6 +135,10 @@ The pack's part goes after the card and the instructions, `About` and the exampl
 ```go
 {{ includeFileText "examples/guide/pack_test.go" }}
 ```
+
+### Answering with one call
+
+Most questions in a domain apply a concept the host has already written as a relation to a name the question gives: callers of a function, tests reaching a file, what a package depends on. A small model writing a whole program for each is where it fails most, so a pack can list those relations in `Callables` ([#484](https://github.com/panyam/jaala/issues/484)), each with what it answers and a line per argument, in the host's words. `Translate` then asks the model first to pick one and fill its arguments, or reply `none`. It asks with the pack's `About` and `Card`, the catalogue and the question, not the card or the examples, under a grammar that allows only `none` or a call of a listed relation. A bare call is a program whose rows bind its variables, so `deps.depends_on("app", ?d)` is checked, run, judged and voted on as any draft is. A refused call goes back once, and after a second refusal, a repeat or a `none`, the question is drafted as before in a fresh conversation, so a question no relation fits costs one short reply. A pick is a `Try` with `Mode` `"call"`, and a `none` is a `Step`, so a draft after it still counts as the first try. Over the guide's eight questions, with `imports`, `deps.depends_on` and `pkg` listed, a scripted small model answers six on the first try in about a quarter of the tokens drafting took (`TestEvalCallable` in `frontends/nl`).
 
 ## Extracting facts from text
 
