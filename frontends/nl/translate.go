@@ -180,11 +180,6 @@ type Try struct {
 	// quoted value the data holds in another spelling the conversation had seen. Text is the
 	// rewritten draft, and the try before it the model's own.
 	Repair string
-
-	// action and result are set for a reply that was an action (Options.Actions), which Translate
-	// records as a Step rather than a Try, and seen holds the text values its result showed.
-	action, result string
-	seen           []string
 }
 
 // The Try kinds that aren't a CheckError's.
@@ -221,47 +216,10 @@ func Translate(ctx context.Context, question string, v *ns.Vocabulary, g Grounde
 
 func translate(ctx context.Context, question string, v *ns.Vocabulary, g Grounder, m Model, o Options) (Program, Trace, error) {
 	var tr Trace
-	if o.Pack != nil && g == nil {
-		g = o.Pack.Grounder
-	}
-	o.grounder = g
-	pr := o.Pack.prompts()
-	if err := pr.checkTemplates(); err != nil {
-		return Program{}, tr, err
-	}
-	prefix, err := promptPrefix(v, o)
-	if err != nil {
-		return Program{}, tr, err
-	}
 	spend := &spending{budget: o.Budget, start: time.Now()}
-	ask := question
-	var cands []Candidate
-	if g != nil {
-		if cands, err = g.Ground(ctx, question); err != nil {
-			return Program{}, tr, fmt.Errorf("nl: grounding the question: %w", err)
-		}
-		ask += grounded(pr.Grounded, cands)
-	}
-	tries := o.MaxTries
-	if tries <= 0 {
-		tries = 3
-	}
-	grammar := o.Grammar
-	switch {
-	case o.NoGrammar:
-		grammar = ""
-	case grammar != "":
-	case o.FrontEnd != nil:
-		grammar, err = o.FrontEnd.Grammar(v)
-	default:
-		grammar, err = GrammarFor(v)
-	}
+	s, err := NewSession(ctx, question, v, g, o)
 	if err != nil {
 		return Program{}, tr, err
-	}
-	answerGrammar := grammar
-	if o.Actions != nil {
-		grammar = actionGrammar(grammar, g != nil)
 	}
 	models := []Model{m}
 	if o.Fallback != nil {
@@ -269,8 +227,12 @@ func translate(ctx context.Context, question string, v *ns.Vocabulary, g Grounde
 	}
 	var last error
 	var held *Program // an answer escalated past, kept in case nothing better comes
-	if o.Pack != nil && len(o.Pack.Callables) > 0 {
-		p, prompt, ok, err := pickCall(ctx, ask, v, m, o, &tr, spend)
+	pick, err := s.Pick()
+	if err != nil {
+		return Program{}, tr, err
+	}
+	if pick != nil {
+		p, prompt, ok, err := pickCall(ctx, pick, m, &tr, spend)
 		if err != nil {
 			return Program{}, tr, err
 		}
@@ -278,9 +240,7 @@ func translate(ctx context.Context, question string, v *ns.Vocabulary, g Grounde
 			p.Confidence = Confidence{Drawn: 1, Agreed: 1, Ran: o.Base != nil, Judged: o.Pack.Check != nil}
 			if o.Vote != nil {
 				conf := p.Confidence
-				po := o
-				po.FrontEnd = nil
-				p, tr.Votes = vote(ctx, m, prompt, p, v, po, spend)
+				p, tr.Votes = vote(ctx, m, prompt, p, pick, o.Vote, spend)
 				conf.Drawn, conf.Agreed = p.Confidence.Drawn, p.Confidence.Agreed
 				p.Confidence = conf
 			}
@@ -291,73 +251,68 @@ func translate(ctx context.Context, question string, v *ns.Vocabulary, g Grounde
 			held = &p
 		}
 	}
-	mem := &memory{found: pr.CompactFound, refused: pr.CompactRefused} // what the actions have shown, across models, since it is about the data
+	pr := s.pr
 	compact := o.Actions != nil && o.Actions.Compact
 	for k, model := range models {
-		mem.facts, mem.last = nil, "" // a fallback starts a fresh conversation
-		turns := []Turn{{RoleUser, ask}}
-		if k > 0 && errors.Is(last, errEmpty) {
-			turns[0].Text += "\n\n" + pr.EmptyFallback
-		}
-		lastModel := k == len(models)-1
-		refused := map[string]error{}
-		why := map[string]string{} // what each refused draft was told, in its own language
-		reasked := false           // a repeated empty draft was asked again (#483)
+		c := s.NewConversation(last, k == len(models)-1)
+		turns := []Turn{{RoleUser, c.Ask()}}
 		asked := map[string]bool{}
 		steps := 0
-		for t := 0; t < tries; {
+	turn:
+		for {
 			if err := ctx.Err(); err != nil {
 				return Program{}, tr, err
 			}
 			if err := spend.check(); err != nil {
 				return Program{}, tr, err
 			}
-			g, oo := grammar, o
-			if o.Actions != nil && steps >= o.Actions.steps() {
-				g, oo.Actions = answerGrammar, nil // out of steps: the next reply is the answer
+			grammar, acting := s.ActionGrammar(), o.Actions != nil
+			if acting && steps >= s.MaxSteps() {
+				grammar, acting = s.Grammar(), false // out of steps: the next reply is the answer
 			}
 			sent := turns
 			if compact {
-				sent = mem.compact(turns[0].Text)
+				sent = c.Compact()
 			}
-			try, p, err := draft(ctx, model, Prompt{Prefix: prefix, Turns: sent, Grammar: g}, v, oo, refused)
+			try, err := complete(ctx, model, Prompt{Prefix: s.Prefix(), Turns: sent, Grammar: grammar})
 			spend.add(try.TokensIn, try.TokensOut)
-			if errors.Is(err, errAction) {
-				result := try.result
-				if asked[try.Text] {
-					result = pr.AskedAgain + " " + result
+			if err != nil {
+				if o.FrontEnd != nil {
+					try.Language = o.FrontEnd.Language()
 				}
-				asked[try.Text] = true
-				steps++
-				if steps == o.Actions.steps() {
-					result += "\n\n" + pr.LastLook
-				}
-				tr.Steps = append(tr.Steps, Step{Model: try.Model, Action: try.action, Text: try.Text, Result: result, After: len(tr.Tries),
-					TokensIn: try.TokensIn, TokensOut: try.TokensOut, TokensCached: try.TokensCached, Latency: try.Latency})
-				mem.see(try.seen)
-				mem.facts = append(mem.facts, fact(try.Text, result))
-				turns = append(turns, Turn{RoleModel, try.Text}, Turn{RoleUser, result})
-				continue
+				tr.Tries = append(tr.Tries, try)
+				last = err
+				break
 			}
-			t++
-			if err != nil && o.Actions != nil && repairable(try) {
-				// a guessed spelling of a value the conversation has seen: fixed here, not by the model
-				if text, what, ok := mem.repair(try.Text, domainOf(try.Err, v)); ok {
-					rtry, rp, rerr := check(ctx, Try{Model: try.Model, Language: try.Language, Text: text, Repair: what,
-						explain: func(err error) string { return Explain(text, err) }}, v, o, 0)
-					if rerr == nil {
-						tr.Tries = append(tr.Tries, try)
-						try, p, err = rtry, rp, nil
+			if acting {
+				if action, arg, ok := readAction(unfence(try.Text)); ok {
+					text := unfence(try.Text)
+					result := s.Act(ctx, action, arg)
+					if asked[text] {
+						result = pr.AskedAgain + " " + result
 					}
+					asked[text] = true
+					steps++
+					if steps == s.MaxSteps() {
+						result += "\n\n" + pr.LastLook
+					}
+					tr.Steps = append(tr.Steps, Step{Model: try.Model, Action: action, Text: text, Result: result, After: len(tr.Tries),
+						TokensIn: try.TokensIn, TokensOut: try.TokensOut, TokensCached: try.TokensCached, Latency: try.Latency})
+					c.Noted(text, result)
+					turns = append(turns, Turn{RoleModel, text}, Turn{RoleUser, result})
+					continue
 				}
 			}
-			tr.Tries = append(tr.Tries, try)
-			if err == nil {
+			vd := c.Judge(ctx, try)
+			tr.Tries = append(tr.Tries, vd.Tries...)
+			switch {
+			case vd.Program != nil:
+				p := *vd.Program
 				p.Confidence = Confidence{Drawn: 1, Agreed: 1, Ran: o.Base != nil, Judged: o.Pack != nil && o.Pack.Check != nil, Steps: steps}
 				if o.Vote != nil {
 					var votes []Try
 					conf := p.Confidence
-					p, votes = vote(ctx, model, Prompt{Prefix: prefix, Turns: sent, Grammar: answerGrammar}, p, v, o, spend)
+					p, votes = vote(ctx, model, Prompt{Prefix: s.Prefix(), Turns: sent, Grammar: s.Grammar()}, p, s, o.Vote, spend)
 					conf.Drawn, conf.Agreed = p.Confidence.Drawn, p.Confidence.Agreed
 					p.Confidence = conf
 					tr.Votes = append(tr.Votes, votes...)
@@ -368,45 +323,37 @@ func translate(ctx context.Context, question string, v *ns.Vocabulary, g Grounde
 						held = &p
 					}
 					last = errLowAgreement
-					break
+					break turn
 				}
 				return p, tr, nil
+			case vd.Stop != nil:
+				last = vd.Stop
+				break turn
 			}
-			last = err
-			what := "program"
-			if o.FrontEnd != nil {
-				what = "query"
-			}
-			if try.Kind == KindRepeat && !reasked && errors.Is(err, errEmpty) {
-				// a small model resends the draft it just wrote after an empty answer: once per turn it
-				// is told again, more pointedly, rather than losing its remaining tries (#483)
-				reasked = true
-				tr.Tries[len(tr.Tries)-1].Reasked = true
-				msg := reask(pr, what, why[try.Text], err, o.FrontEnd != nil, cands)
-				mem.facts = append(mem.facts, fact(try.Text, "repeated, and answered nothing again"))
-				mem.last = try.Text + "\n" + msg
-				turns = append(turns, Turn{RoleModel, try.Text}, Turn{RoleUser, msg})
-				continue
-			}
-			if try.Kind == KindModel || try.Kind == KindRepeat || try.Kind == KindEmpty && !lastModel {
-				break
-			}
-			refused[try.Text] = err
-			fix := fmt.Sprintf(pr.Fix, what)
-			if try.Kind == KindEmpty {
-				fix = fmt.Sprintf(pr.FixEmpty, what)
-			}
-			told := strings.TrimRight(try.explain(err), "\n")
-			why[try.Text] = told
-			mem.facts = append(mem.facts, fact(try.Text, "refused ("+try.Kind+"): "+strings.Join(strings.Fields(told), " ")))
-			mem.last = try.Text + "\n" + told + "\n\n" + fix
-			turns = append(turns, Turn{RoleModel, try.Text}, Turn{RoleUser, told + "\n\n" + fix})
+			reply := vd.Tries[len(vd.Tries)-1].Text
+			turns = append(turns, Turn{RoleModel, reply}, Turn{RoleUser, vd.Continue})
 		}
 	}
 	if held != nil {
 		return *held, tr, nil
 	}
 	return Program{}, tr, fmt.Errorf("%w after %d tries: %w", errNoProgram, len(tr.Tries), last)
+}
+
+// complete asks model once, timing it, and returns its reply as a Try that carries what it cost. A
+// model that failed comes back as a Try of KindModel holding its error, and an error naming the model.
+func complete(ctx context.Context, model Model, p Prompt) (Try, error) {
+	try := Try{Model: model.Name()}
+	start := time.Now()
+	c, err := model.Complete(ctx, p)
+	try.Latency = time.Since(start)
+	if err != nil {
+		try.Err, try.Kind = err, KindModel
+		return try, fmt.Errorf("model %s: %w", try.Model, err)
+	}
+	try.Text = c.Text
+	try.TokensIn, try.TokensOut, try.TokensCached = c.TokensIn, c.TokensOut, c.TokensCached
+	return try, nil
 }
 
 // reask is what a model is told when it resends a draft that answered nothing (#483): that it did, what
@@ -515,40 +462,6 @@ func hintFor(ctx context.Context, p *Pack, why *datalog.EmptyReport) string {
 
 // Is makes an EmptyAnswer the empty answer Translate moves to the fallback on.
 func (e *EmptyAnswer) Is(target error) bool { return target == errEmpty }
-
-// draft asks model once, then parses, checks and, over o.Base, evaluates what it wrote, unless it is
-// a draft refused already, whose error it returns again.
-func draft(ctx context.Context, model Model, p Prompt, v *ns.Vocabulary, o Options, refused map[string]error) (Try, Program, error) {
-	try := Try{Model: model.Name()}
-	if o.FrontEnd != nil {
-		try.Language = o.FrontEnd.Language()
-	}
-	start := time.Now()
-	c, err := model.Complete(ctx, p)
-	try.Latency = time.Since(start)
-	if err != nil {
-		try.Err, try.Kind = err, KindModel
-		return try, Program{}, fmt.Errorf("model %s: %w", try.Model, err)
-	}
-	try.TokensIn, try.TokensOut, try.TokensCached = c.TokensIn, c.TokensOut, c.TokensCached
-	try.Text = unfence(c.Text)
-	try.explain = func(err error) string { return Explain(try.Text, err) }
-	refuse := func(err error, kind string) (Try, Program, error) {
-		try.Err, try.Kind = err, kind
-		return try, Program{}, err
-	}
-	if o.Actions != nil {
-		if action, arg, ok := readAction(try.Text); ok {
-			try.action = action
-			try.result, try.seen = act(ctx, action, arg, v, o)
-			return try, Program{}, errAction
-		}
-	}
-	if err, ok := refused[try.Text]; ok {
-		return refuse(fmt.Errorf("the same draft as before: %w", err), KindRepeat)
-	}
-	return check(ctx, try, v, o, 0)
-}
 
 // check compiles or parses try's text, checks it and, over o.Base, evaluates it, with at most limit
 // rows when limit isn't 0, and judges the answer by the pack's Check.

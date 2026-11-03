@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/panyam/jaala/datalog"
-	"github.com/panyam/jaala/ns"
 )
 
 // A Vote draws more answers from the model that answered, once it has, and keeps the program whose
@@ -149,9 +148,8 @@ func (t Try) Class() string {
 // vote draws o.Vote's other drafts from model, asked p with only the answer's grammar, and returns
 // the program the most drafts agree with, first among equals, with its Confidence's Drawn and Agreed
 // set, and every draft it drew. A draft the budget leaves no room for isn't drawn.
-func vote(ctx context.Context, model Model, p Prompt, first Program, v *ns.Vocabulary, o Options, spend *spending) (Program, []Try) {
-	n := o.Vote.drafts()
-	o.Actions = nil
+func vote(ctx context.Context, model Model, p Prompt, first Program, s *Session, vt *Vote, spend *spending) (Program, []Try) {
+	n := vt.drafts()
 	draws := make([]Try, n-1)
 	progs := make([]Program, n-1)
 	drawn := make([]bool, n-1)
@@ -161,26 +159,19 @@ func vote(ctx context.Context, model Model, p Prompt, first Program, v *ns.Vocab
 		}
 		q := p
 		q.Draw = i + 1
-		try := Try{Model: model.Name()}
-		if o.FrontEnd != nil {
-			try.Language = o.FrontEnd.Language()
-		}
-		start := time.Now()
-		c, err := model.Complete(ctx, q)
-		try.Latency = time.Since(start)
+		try, err := complete(ctx, model, q)
 		drawn[i] = true
 		if err != nil {
-			try.Err, try.Kind = err, KindModel
+			if s.o.FrontEnd != nil {
+				try.Language = s.o.FrontEnd.Language()
+			}
 			draws[i] = try
 			return
 		}
-		spend.add(c.TokensIn, c.TokensOut)
-		try.TokensIn, try.TokensOut, try.TokensCached = c.TokensIn, c.TokensOut, c.TokensCached
-		try.Text = unfence(c.Text)
-		try.explain = func(err error) string { return Explain(try.Text, err) }
-		draws[i], progs[i], _ = check(ctx, try, v, o, 0)
+		spend.add(try.TokensIn, try.TokensOut)
+		draws[i], progs[i], _ = s.Draw(ctx, try)
 	}
-	if o.Vote.Parallel {
+	if vt.Parallel {
 		var wg sync.WaitGroup
 		for i := range draws {
 			wg.Go(func() { ask(i) })
@@ -203,7 +194,7 @@ func vote(ctx context.Context, model Model, p Prompt, first Program, v *ns.Vocab
 	keys := make([]string, len(all))
 	for i, prog := range all {
 		if agrees[i] {
-			keys[i] = voteKey(prog, o.Base != nil)
+			keys[i] = s.Key(prog)
 			counts[keys[i]]++
 		}
 	}

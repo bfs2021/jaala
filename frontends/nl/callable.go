@@ -2,9 +2,9 @@ package nl
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
-	"time"
 
 	"github.com/panyam/jaala/ns"
 )
@@ -138,63 +138,39 @@ func pickRules(cs []Callable, v *ns.Vocabulary) ([]rule, error) {
 // times, each refusal going back as a draft's does. It returns the accepted program, or false when the
 // model replied none or no call it picked was accepted; Translate then drafts a program. Each call is
 // a Try with Mode "call", and a none a Step. A pick is jaala's text whatever o.FrontEnd is.
-func pickCall(ctx context.Context, ask string, v *ns.Vocabulary, model Model, o Options, tr *Trace, spend *spending) (Program, Prompt, bool, error) {
-	cs := o.Pack.Callables
-	prefix, err := pickPrefix(cs, v, o.Pack)
-	if err != nil {
-		return Program{}, Prompt{}, false, err
-	}
-	grammar := ""
-	if !o.NoGrammar {
-		if grammar, err = pickGrammar(cs, v); err != nil {
-			return Program{}, Prompt{}, false, err
-		}
-	}
-	o.FrontEnd, o.Actions = nil, nil
-	turns := []Turn{{RoleUser, ask}}
-	refused := map[string]error{}
-	for t := 0; t < pickTries; t++ {
+func pickCall(ctx context.Context, pick *Session, model Model, tr *Trace, spend *spending) (Program, Prompt, bool, error) {
+	c := pick.NewConversation(nil, true)
+	turns := []Turn{{RoleUser, c.Ask()}}
+	for {
 		if err := ctx.Err(); err != nil {
 			return Program{}, Prompt{}, false, err
 		}
 		if err := spend.check(); err != nil {
 			return Program{}, Prompt{}, false, err
 		}
-		prompt := Prompt{Prefix: prefix, Turns: turns, Grammar: grammar}
-		try := Try{Model: model.Name(), Mode: ModeCall}
-		start := time.Now()
-		c, err := model.Complete(ctx, prompt)
-		try.Latency = time.Since(start)
+		prompt := Prompt{Prefix: pick.Prefix(), Turns: turns, Grammar: pick.Grammar()}
+		try, err := complete(ctx, model, prompt)
 		if err != nil {
-			try.Err, try.Kind = fmt.Errorf("model %s: %w", try.Model, err), KindModel
+			try.Err, try.Mode = err, ModeCall
 			tr.Tries = append(tr.Tries, try)
 			return Program{}, Prompt{}, false, nil
 		}
-		spend.add(c.TokensIn, c.TokensOut)
-		try.TokensIn, try.TokensOut, try.TokensCached = c.TokensIn, c.TokensOut, c.TokensCached
-		try.Text = unfence(c.Text)
-		if try.Text == ActionNone {
-			tr.Steps = append(tr.Steps, Step{Model: try.Model, Action: ActionNone, Text: try.Text, Result: "no relation answers it: drafting a program",
+		spend.add(try.TokensIn, try.TokensOut)
+		vd := c.Judge(ctx, try)
+		if errors.Is(vd.Stop, ErrNoCall) {
+			tr.Steps = append(tr.Steps, Step{Model: try.Model, Action: ActionNone, Text: unfence(try.Text), Result: "no relation answers it: drafting a program",
 				After: len(tr.Tries), TokensIn: try.TokensIn, TokensOut: try.TokensOut, TokensCached: try.TokensCached, Latency: try.Latency})
 			return Program{}, Prompt{}, false, nil
 		}
-		try.explain = func(err error) string { return Explain(try.Text, err) }
-		var p Program
-		if prev, ok := refused[try.Text]; ok {
-			err = fmt.Errorf("the same draft as before: %w", prev)
-			try.Err, try.Kind = err, KindRepeat
-		} else {
-			try, p, err = check(ctx, try, v, o, 0)
+		tr.Tries = append(tr.Tries, vd.Tries...)
+		switch {
+		case vd.Program != nil:
+			return *vd.Program, prompt, true, nil
+		case vd.Stop != nil:
+			return Program{}, Prompt{}, false, nil
 		}
-		tr.Tries = append(tr.Tries, try)
-		if err == nil {
-			return p, prompt, true, nil
-		}
-		refused[try.Text] = err
-		why := strings.TrimRight(try.explain(err), "\n")
-		turns = append(turns, Turn{RoleModel, try.Text}, Turn{RoleUser, why + "\n\n" + o.Pack.prompts().PickRetry})
+		turns = append(turns, Turn{RoleModel, vd.Tries[0].Text}, Turn{RoleUser, vd.Continue})
 	}
-	return Program{}, Prompt{}, false, nil
 }
 
 // ModeCall is a Try's Mode for a call the model picked from Pack.Callables (#484); a drafted program's
