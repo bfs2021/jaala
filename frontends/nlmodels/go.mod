@@ -4,8 +4,8 @@ go 1.26.9
 
 require (
 	github.com/panyam/chakra v0.2.2
-	github.com/panyam/jaala v0.1.90
-	github.com/panyam/jaala/frontends/nl v0.1.90
+	github.com/panyam/jaala v0.1.91
+	github.com/panyam/jaala/frontends/nl v0.1.91
 )
 
 require (
