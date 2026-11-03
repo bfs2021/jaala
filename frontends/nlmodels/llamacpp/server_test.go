@@ -2,11 +2,11 @@ package llamacpp
 
 import (
 	"context"
-	"encoding/json"
 	"os"
 	"strings"
 	"testing"
 
+	agent "github.com/panyam/chakra"
 	"github.com/panyam/jaala/datalog"
 	"github.com/panyam/jaala/frontends/nl"
 	"github.com/panyam/jaala/internal/gbnf"
@@ -50,20 +50,25 @@ func TestARealServerKeepsTheModelToTheGrammar(t *testing.T) {
 	}
 	ctx := context.Background()
 	c := New(url)
+	m, err := c.model() // the provider Complete sends through, asked directly for its finish reason
+	if err != nil {
+		t.Fatal(err)
+	}
+	prov := m.Provider
+	temp := 1.2
 	stopped := 0
 	for i := 0; i < 24; i++ {
-		req := request{Messages: []message{{"system", "Write a program."}, {"user", "what calls what?"}}, Grammar: text,
-			CachePrompt: true, MaxTokens: 160, Temperature: 1.2}
-		body, _ := json.Marshal(req)
-		var res response
-		if err := post(ctx, c.HTTP, c.URL+"/v1/chat/completions", body, &res); err != nil {
+		res, err := prov.Generate(ctx, agent.ProviderRequest{Instructions: "Write a program.",
+			Messages: []agent.Message{{Role: agent.RoleUser, Text: "what calls what?"}}, Guided: &agent.GuidedDecoding{Grammar: text},
+			MaxTokens: 160, Temperature: &temp})
+		if err != nil {
 			t.Fatalf("the server refused the grammar: %v", err)
 		}
-		reply := res.Choices[0].Message.Content
+		reply := res.Text
 		if !ours.AcceptsPrefix(reply) {
 			t.Errorf("the reply leaves the grammar as nl reads it: %q", reply)
 		}
-		if res.Choices[0].FinishReason != "stop" {
+		if res.FinishReason != "stop" {
 			continue // cut off at MaxTokens: a prefix, checked above
 		}
 		stopped++

@@ -152,7 +152,11 @@ GOARCH=wasm go test ./ns` (#417 ran `ns` that way).
   and `program.gbnf` must come out byte-identical). `Translate` sends
   it as `Prompt.Grammar`.
 - **`frontends/nlmodels` is a module of its own** (#330): thin clients for local models already
-  running, `llamacpp` (sends the grammar, `cache_prompt`) and `ollama` (no GBNF, so no grammar).
+  running, `llamacpp` (sends the grammar, `cache_prompt`) and `ollama` (no GBNF, so no grammar), both
+  over its `chakra` package, an `nl.Model` over any chakra `Provider` (chakra v0.2.1 added the seed,
+  the grammar and cached tokens jaala needed: chakra#169, #19, #175). The llama.cpp client always sends
+  `Temperature`, since chakra omits a nil one and llama-server then samples at 0.8. jaala's agent loop
+  moves onto chakra from here, jaala as a helper a chakra agent plugs in, never a wrapper over it.
   CI's `nlmodels` job tests it; the root's `./...` doesn't reach it. Like every
   sub-module it requires jaala and `frontends/nl` at the last release and replaces both with the
   checkout (Releasing). A consumer must not pair the nl module with a jaala tag up to v0.1.71,

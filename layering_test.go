@@ -16,7 +16,7 @@ import (
 //	datalog  the engine                  imports ns only
 //	frontends/nl        the plain-language front end (#321)   imports ns, datalog and internal/gbnf, in a module of its own
 //	frontends/cypher    the Cypher front end (#352)            imports ns, datalog, internal/gbnf and nl (whose FrontEnd it is, #354), in a module of its own
-//	frontends/nlmodels  clients for local models (#330)       import frontends/nl, in a module of their own
+//	frontends/nlmodels  model clients over chakra (#330)      import frontends/nl, and llamacpp and ollama its chakra package, in a module of their own
 //	internal/gbnf  GBNF tables and a recognizer   imports nothing; the front ends render and sample their grammars with it (#324, #354)
 //	internal/guide the guide's example     the front ends' shared test fixture (#352); only tests import it
 //
@@ -29,8 +29,9 @@ func TestLayering(t *testing.T) {
 		"datalog":                     {"ns"},
 		"frontends/nl":                {"ns", "datalog", "internal/gbnf"},
 		"frontends/cypher":            {"ns", "datalog", "internal/gbnf", "frontends/nl"},
-		"frontends/nlmodels/llamacpp": {"frontends/nl"},
-		"frontends/nlmodels/ollama":   {"frontends/nl"},
+		"frontends/nlmodels/chakra":   {"frontends/nl"},
+		"frontends/nlmodels/llamacpp": {"frontends/nl", "frontends/nlmodels/chakra"},
+		"frontends/nlmodels/ollama":   {"frontends/nl", "frontends/nlmodels/chakra"},
 		"internal/gbnf":               {},
 	}
 	for dir, may := range allowed {

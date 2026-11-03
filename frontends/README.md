@@ -10,7 +10,8 @@ inside its directory.
   translate loop, a host's domain pack (`nl.Pack`, `nl.DataCard`) and the eval that scores it. It
   imports `ns` and `datalog`.
 - `nlmodels/` (#330) has clients for local models already running: llama.cpp's `llama-server`,
-  which takes the grammar, and Ollama, which can't. It imports `nl`.
+  which takes the grammar, and Ollama, which can't. Both send through chakra's providers, and its
+  `chakra` package is an `nl.Model` over any chakra `Provider`. It imports `nl`.
 - `mcp/` (#347) is an MCP server for any vocabulary, on mcpkit: `query`, `schema`, `explain` and,
   with a model, `ask`, its instructions written from a host's `nl.Pack`, and a host's own arguments
   on every tool (#357). A pack mapping its graph (`Pack.Cypher`) adds a `cypher` tool (#366), so mcp

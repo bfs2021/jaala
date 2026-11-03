@@ -13,6 +13,24 @@ import (
 	"github.com/panyam/jaala/frontends/nl"
 )
 
+// message and request are what llama-server reads from a chat request, decoded from what was sent.
+type message struct {
+	Role    string `json:"role"`
+	Content string `json:"content"`
+}
+
+type request struct {
+	Model       string    `json:"model,omitempty"`
+	Messages    []message `json:"messages"`
+	Grammar     string    `json:"grammar,omitempty"`
+	CachePrompt bool      `json:"cache_prompt"`
+	MaxTokens   int       `json:"max_tokens,omitempty"`
+	Temperature float64   `json:"temperature"`
+	Seed        int       `json:"seed,omitempty"`
+	Stream      bool      `json:"stream"`
+	raw         map[string]any
+}
+
 // server answers as llama-server would, recording each request.
 func server(t *testing.T, status int, reply string) (*httptest.Server, *[]request) {
 	t.Helper()
@@ -26,6 +44,7 @@ func server(t *testing.T, status int, reply string) (*httptest.Server, *[]reques
 		if err := json.Unmarshal(b, &req); err != nil {
 			t.Errorf("not JSON: %s", b)
 		}
+		json.Unmarshal(b, &req.raw)
 		got = append(got, req)
 		w.WriteHeader(status)
 		io.WriteString(w, reply)
@@ -65,6 +84,9 @@ func TestCompleteSendsTheChatAndTheGrammar(t *testing.T) {
 	if req.Grammar != prompt.Grammar || !req.CachePrompt || req.Stream || req.MaxTokens != 512 || req.Temperature != 0 || req.Model != "qwen" {
 		t.Errorf("request %+v", req)
 	}
+	if _, sent := req.raw["temperature"]; !sent {
+		t.Errorf("no temperature sent, so llama-server samples at its default rather than greedily: %v", req.raw)
+	}
 	if req.Seed != 0 {
 		t.Errorf("seed %d for a prompt that isn't a vote's draft", req.Seed)
 	}
@@ -83,7 +105,8 @@ func TestCompleteSendsNoGrammarWhenThePromptHasNone(t *testing.T) {
 	var raw map[string]any
 	s.Config.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		json.NewDecoder(r.Body).Decode(&raw)
-		io.WriteString(w, `{"choices":[{"message":{"content":"x"}}],"timings":{"cache_n":7}}`)
+		// usage without prompt_tokens_details, as llama.cpp builds before it sent: the timings say.
+		io.WriteString(w, `{"choices":[{"message":{"content":"x"}}],"usage":{"prompt_tokens":9,"completion_tokens":1},"timings":{"cache_n":7}}`)
 	})
 	p := prompt
 	p.Grammar = ""
