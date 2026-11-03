@@ -5,19 +5,19 @@ Maintained by /checkpoint: one thread per branch, pruned when the branch merges.
 
 ## At a glance
 
-- No open branches or PRs. `main` is v0.1.88, which ships #475 (#474, `mcp.Options.Server`, for
-  agni#1172's `WithListTTLMs`); agni takes it from the tag.
-- Mission #437 (`mission_text_memory`) is active from 2026-10-26 and 2/3. Next ready is #415 (P1):
-  its first PR is a `make exercise-memory` target running the one-shot arm (`Extract`, then
-  `Translate`) on a LongMemEval oracle subset through a local model.
-- Mission #322 (`mission_agent_frontend`), also active, has all 26 jaala tickets closed and nothing
-  ready; it closes when Declaire's translator run meets declaire#288's bar. Exercise rerun at 02aa5de
-  (v0.1.88): nl and Cypher `TestEval` both 7/8, unchanged.
-- Mission #420 (Neo4j/Memgraph, not active) is 4/6, both left with hosts (declaire#339, agni#1073).
-- Selfcheck: passed on 7079085 (v0.1.88), 5000 seeds; next due 5 merged PRs after it.
-- This run: dropped feat/mcp-server-options (PR #475 merged); the closed #452's branch is gone from the
-  remote.
+- No open branches or PRs. The last tag is v0.1.90 (chakra-backed `nlmodels`, #487); `main` adds #491
+  (#483, re-asking a repeated empty draft) and #492 (#480, `ns.Builtin.Aliased`), not yet tagged.
+- Mission #322 (`mission_agent_frontend`) is active and 28/31. Next ready is #484 (P1), then #485 and
+  #490 (P2, the translator entry point). Exercise ran at 0e29960: nl `TestEval` 7/8; #492 merged since.
+- Mission #437 (`mission_text_memory`) is active and 2/3. Next ready is #415 (P1). Its exercise was
+  last logged at d56ca11, and 8 PRs have merged since.
+- Selfcheck: last pass on 7079085 (v0.1.88); a run on 0e29960 was started 2026-11-03, before #492
+  merged (log in the session scratchpad). `make selfcheck-status` reads its note.
+- This run: dropped the old run's v0.1.88 lines; no other branches on the remote.
 
 ## Across threads
 
-- Nothing repo-wide beyond CLAUDE.md.
+- v0.1.90 removed `frontends/nlmodels/llamacpp` and `ollama`: Declaire doesn't build on it until
+  declaire#357's step 1 lands (upgrade lines on #487).
+- After the next tag carrying #491, ask on declaire#288 for the translator arms' rerun (#483's second
+  done-when line).
