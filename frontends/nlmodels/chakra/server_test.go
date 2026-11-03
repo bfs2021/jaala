@@ -1,4 +1,4 @@
-package llamacpp
+package chakra
 
 import (
 	"context"
@@ -19,7 +19,7 @@ import (
 // what's tested; ./selfcheck.sh runs it on that one when `make llama` has fetched it:
 //
 //	llama-server -m ~/.cache/jaala/stories260K.gguf --port 18089 --chat-template chatml
-//	JAALA_LLAMACPP_URL=http://127.0.0.1:18089 go test ./llamacpp -run RealServer -v
+//	JAALA_LLAMACPP_URL=http://127.0.0.1:18089 go test ./chakra -run RealServer -v
 //
 // Every reply has to stay inside the grammar as nl's recognizer reads it, token by token. The test
 // model writes nonsense into a string and rarely closes it, so its replies end at MaxTokens and are
@@ -49,12 +49,8 @@ func TestARealServerKeepsTheModelToTheGrammar(t *testing.T) {
 		t.Fatal(err)
 	}
 	ctx := context.Background()
-	c := New(url)
-	m, err := c.model() // the provider Complete sends through, asked directly for its finish reason
-	if err != nil {
-		t.Fatal(err)
-	}
-	prov := m.Provider
+	c := llama(t, url)
+	prov := c.Provider // asked directly for its finish reason
 	temp := 1.2
 	stopped := 0
 	for i := 0; i < 24; i++ {

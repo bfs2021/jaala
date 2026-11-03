@@ -3,7 +3,7 @@ module github.com/panyam/jaala/frontends/nlmodels
 go 1.26.9
 
 require (
-	github.com/panyam/chakra v0.2.1
+	github.com/panyam/chakra v0.2.2
 	github.com/panyam/jaala v0.1.89
 	github.com/panyam/jaala/frontends/nl v0.1.89
 )

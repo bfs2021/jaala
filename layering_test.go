@@ -24,15 +24,13 @@ import (
 func TestLayering(t *testing.T) {
 	const mod = "github.com/panyam/jaala/"
 	allowed := map[string][]string{
-		"ns":                          {},
-		"stdlib":                      {"ns"},
-		"datalog":                     {"ns"},
-		"frontends/nl":                {"ns", "datalog", "internal/gbnf"},
-		"frontends/cypher":            {"ns", "datalog", "internal/gbnf", "frontends/nl"},
-		"frontends/nlmodels/chakra":   {"frontends/nl"},
-		"frontends/nlmodels/llamacpp": {"frontends/nl", "frontends/nlmodels/chakra"},
-		"frontends/nlmodels/ollama":   {"frontends/nl", "frontends/nlmodels/chakra"},
-		"internal/gbnf":               {},
+		"ns":                        {},
+		"stdlib":                    {"ns"},
+		"datalog":                   {"ns"},
+		"frontends/nl":              {"ns", "datalog", "internal/gbnf"},
+		"frontends/cypher":          {"ns", "datalog", "internal/gbnf", "frontends/nl"},
+		"frontends/nlmodels/chakra": {"frontends/nl"},
+		"internal/gbnf":             {},
 	}
 	for dir, may := range allowed {
 		pkg, err := build.ImportDir(dir, 0)

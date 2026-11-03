@@ -9,10 +9,12 @@ import (
 	"github.com/panyam/jaala/frontends/nl"
 )
 
-// recorder is a Provider answering every Generate with res, or err, and keeping each request.
+// recorder is a Provider answering every Generate with res, or err, keeping each request and
+// reporting caps as what it can send.
 type recorder struct {
 	res  agent.ProviderResponse
 	err  error
+	caps agent.Capabilities
 	reqs []agent.ProviderRequest
 }
 
@@ -28,6 +30,8 @@ func (r *recorder) Generate(_ context.Context, req agent.ProviderRequest) (*agen
 func (r *recorder) Stream(context.Context, agent.ProviderRequest) (agent.Stream, error) {
 	return nil, errors.New("not streamed")
 }
+
+func (r *recorder) ProviderCapabilities() agent.Capabilities { return r.caps }
 
 var prompt = nl.Prompt{
 	Prefix:  "the card",
@@ -56,42 +60,48 @@ func TestCompleteSendsThePromptAsOneCall(t *testing.T) {
 			t.Errorf("message %d: %+v, want %+v", i, req.Messages[i], want[i])
 		}
 	}
-	if req.MaxTokens != 512 || req.Temperature != nil {
-		t.Errorf("New's model sent max tokens %d, temperature %v", req.MaxTokens, req.Temperature)
-	}
-	if req.Guided != nil || req.Seed != nil {
-		t.Errorf("a model sending neither sent grammar %+v, seed %v", req.Guided, req.Seed)
+	if req.MaxTokens != 512 || req.Temperature == nil || *req.Temperature != 0 {
+		t.Errorf("New's model sent max tokens %d, temperature %v, want 512 at 0", req.MaxTokens, req.Temperature)
 	}
 	if m.Name() != "qwen" {
 		t.Errorf("name %q", m.Name())
 	}
 }
 
-func TestCompleteSendsTheGrammarAndAVotesSeedWhenAsked(t *testing.T) {
-	r := &recorder{res: agent.ProviderResponse{Text: "x"}}
-	temp := 0.0
-	m := &Model{Provider: r, Label: "l", Temperature: &temp, Grammar: true, Seed: true}
+func TestCompleteSendsWhatTheProviderCanSend(t *testing.T) {
 	drawn := prompt
-	drawn.Draw = 2
+	drawn.Draw = 1 // a vote's draws count from 1
 	plain := prompt
 	plain.Grammar = ""
-	for _, p := range []nl.Prompt{prompt, drawn, plain} {
-		if _, err := m.Complete(context.Background(), p); err != nil {
-			t.Fatal(err)
+	for _, c := range []struct {
+		name          string
+		caps          agent.Capabilities
+		grammar, seed bool
+	}{
+		{"llama.cpp", agent.Capabilities{Guided: []string{agent.GuidedGrammar, agent.GuidedJSONSchema}, Seed: true}, true, true},
+		{"ollama", agent.Capabilities{Guided: []string{agent.GuidedJSONSchema}, Seed: true}, false, true},
+		{"anthropic", agent.Capabilities{}, false, false},
+	} {
+		r := &recorder{res: agent.ProviderResponse{Text: "x"}, caps: c.caps}
+		m := New(c.name, r)
+		for _, p := range []nl.Prompt{prompt, drawn, plain} {
+			if _, err := m.Complete(context.Background(), p); err != nil {
+				t.Fatal(err)
+			}
 		}
-	}
-	first, second, third := r.reqs[0], r.reqs[1], r.reqs[2]
-	if first.Guided == nil || first.Guided.Grammar != prompt.Grammar || first.Seed != nil {
-		t.Errorf("first prompt: grammar %+v, seed %v (no seed outside a vote)", first.Guided, first.Seed)
-	}
-	if second.Seed == nil || *second.Seed != 2 {
-		t.Errorf("a vote's second draft was sent seed %v", second.Seed)
-	}
-	if third.Guided != nil {
-		t.Errorf("a prompt with no grammar was sent %+v", third.Guided)
-	}
-	if first.Temperature == nil || *first.Temperature != 0 {
-		t.Errorf("temperature %v, want 0 sent", first.Temperature)
+		first, second, third := r.reqs[0], r.reqs[1], r.reqs[2]
+		if sent := first.Guided != nil && first.Guided.Grammar == prompt.Grammar; sent != c.grammar || (first.Guided != nil && !sent) {
+			t.Errorf("%s: grammar %+v, want sent %v", c.name, first.Guided, c.grammar)
+		}
+		if first.Seed != nil {
+			t.Errorf("%s: seed %v outside a vote", c.name, *first.Seed)
+		}
+		if sent := second.Seed != nil && *second.Seed == 1; sent != c.seed || (second.Seed != nil && !sent) {
+			t.Errorf("%s: a vote's second draft was sent seed %v, want sent %v", c.name, second.Seed, c.seed)
+		}
+		if third.Guided != nil {
+			t.Errorf("%s: a prompt with no grammar was sent %+v", c.name, third.Guided)
+		}
 	}
 }
 

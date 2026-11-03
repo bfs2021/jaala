@@ -92,13 +92,13 @@ A front end is an interface in `nl` (`nl.FrontEnd`) that the front end's own mod
 
 ## Local models
 
-jaala runs no model, but `github.com/panyam/jaala/frontends/nlmodels`, a module of its own, has clients for local ones already running, so no host takes on HTTP clients it doesn't use ([#330](https://github.com/panyam/jaala/issues/330)). They send through [chakra](https://github.com/panyam/chakra)'s providers, and its `chakra.New(label, provider)` is an `nl.Model` over any of them, hosted ones included:
+jaala runs no model. `github.com/panyam/jaala/frontends/nlmodels`, a module of its own so no host takes on HTTP clients it doesn't use ([#330](https://github.com/panyam/jaala/issues/330)), has `chakra.New(label, provider)`, an `nl.Model` over any [chakra](https://github.com/panyam/chakra) `Provider` ([#487](https://github.com/panyam/jaala/issues/487)). The host builds the provider, or names it in chakra's connections config, and jaala sends each prompt through it:
 
-- `llamacpp.New(url)` asks llama.cpp's `llama-server` at its OpenAI-style `/v1/chat/completions`. It sends the prefix as the system message, the prompt's grammar as `grammar`, so the model can only write text that parses, and `cache_prompt`, so the card is processed once. Its `Name` is `llama.cpp`, or `llama.cpp:` and `Model` when one is set.
-- `chakra.New(label, p)` asks any chakra `Provider` (Anthropic, OpenAI, vLLM). Its `Grammar` and `Seed` fields send the prompt's grammar and a vote's seed, for a provider that takes them; chakra refuses one it can't send rather than drop it.
-- `ollama.New(url, model)` asks an Ollama server for one model at its OpenAI-style `/v1/chat/completions`, named `ollama:` and the model. Ollama takes no GBNF grammar (its `format` is a JSON schema), so the model writes freely and costs more tries; a host wanting the grammar held runs the same weights under llama.cpp.
+- llama.cpp's `llama-server`, through `agent.NewLlamaCppProvider`, gets the prefix as the system message, the prompt's grammar as `grammar`, so the model can only write text that parses, and `cache_prompt`, so the card is processed once.
+- Ollama, through `agent.NewOllamaProvider`, takes no GBNF grammar (only a JSON schema), so the model writes freely and costs more tries; a host wanting the grammar held runs the same weights under llama.cpp.
+- A hosted model (Anthropic, OpenAI, vLLM) through chakra's own providers. Anthropic takes no temperature, so set `Temperature` to nil there.
 
-Both reply with at most `MaxTokens` (512 by default) at `Temperature` 0, and take an `HTTP` client of the host's. The tokens a try reports are the server's own counts, with llama.cpp's cached prompt tokens. Here a stand-in for `llama-server` answers one program and prints what it was sent:
+The Model asks the provider what it can send (`agent.CapabilitiesOf`), and sends the grammar and a vote's seed only to one that takes them. It replies with at most `MaxTokens` (512 by default) at `Temperature` 0. The tokens a try reports are the server's own counts, with llama.cpp's cached prompt tokens. Here a stand-in for `llama-server` answers one program and prints what it was sent:
 
 ```go
 {{ includeFileText "examples/guide/localmodel_test.go" }}

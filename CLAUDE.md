@@ -153,11 +153,12 @@ GOARCH=wasm go test ./ns` (#417 ran `ns` that way).
   types and converts with `table`, since vet refuses unkeyed literals of another package's structs,
   and `program.gbnf` must come out byte-identical). `Translate` sends
   it as `Prompt.Grammar`.
-- **`frontends/nlmodels` is a module of its own** (#330): thin clients for local models already
-  running, `llamacpp` (sends the grammar, `cache_prompt`) and `ollama` (no GBNF, so no grammar), both
-  over its `chakra` package, an `nl.Model` over any chakra `Provider` (chakra v0.2.1 added the seed,
-  the grammar and cached tokens jaala needed: chakra#169, #19, #175). The llama.cpp client always sends
-  `Temperature`, since chakra omits a nil one and llama-server then samples at 0.8. jaala's agent loop
+- **`frontends/nlmodels` is a module of its own** (#330): its `chakra` package is an `nl.Model` over
+  any chakra `Provider` (#487), and jaala keeps no model client of its own. llama.cpp and Ollama are
+  chakra's presets (`agent.NewLlamaCppProvider`, `agent.NewOllamaProvider`, chakra#180, v0.2.2); the
+  Model sends the grammar and a vote's seed only when `agent.CapabilitiesOf` says the provider can
+  (llama.cpp both, Ollama a seed, Anthropic neither). `New` sends `Temperature` 0, since chakra omits
+  a nil one and llama-server then samples at 0.8; a host on Anthropic sets it nil. jaala's agent loop
   moves onto chakra from here, jaala as a helper a chakra agent plugs in, never a wrapper over it.
   CI's `nlmodels` job tests it; the root's `./...` doesn't reach it. Like every
   sub-module it requires jaala and `frontends/nl` at the last release and replaces both with the
