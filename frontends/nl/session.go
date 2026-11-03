@@ -1,0 +1,313 @@
+package nl
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"strings"
+
+	"github.com/panyam/jaala/ns"
+)
+
+// A Session is one question's half of a translation that is jaala's (#496): the prompt, the grammar,
+// the actions, how a reply is judged and how two answers are told apart. It runs no model and keeps
+// no loop. Translate drives one with its own, and an agent framework's loop can drive one the same
+// way, asking the model itself and handing each reply to a Conversation.
+//
+// A Session is not safe for concurrent use, except Draw and Key, which read nothing it changes.
+type Session struct {
+	v     *ns.Vocabulary
+	o     Options
+	pr    Prompts
+	cands []Candidate
+	mem   *memory // what the actions have shown, across models, since it is about the data
+
+	prefix, ask, grammar, answerGrammar string
+	tries                               int
+	pick                                bool
+}
+
+// NewSession prepares question over v, as Translate does before asking any model: it checks the
+// pack's prompt templates and examples, writes the prefix, grounds the question (with g, or the
+// pack's Grounder when g is nil) and picks the grammar. An error is one Translate would fail with.
+func NewSession(ctx context.Context, question string, v *ns.Vocabulary, g Grounder, o Options) (*Session, error) {
+	if o.Pack != nil && g == nil {
+		g = o.Pack.Grounder
+	}
+	o.grounder = g
+	pr := o.Pack.prompts()
+	if err := pr.checkTemplates(); err != nil {
+		return nil, err
+	}
+	prefix, err := promptPrefix(v, o)
+	if err != nil {
+		return nil, err
+	}
+	s := &Session{v: v, o: o, pr: pr, prefix: prefix, ask: question,
+		mem: &memory{found: pr.CompactFound, refused: pr.CompactRefused}}
+	if g != nil {
+		if s.cands, err = g.Ground(ctx, question); err != nil {
+			return nil, fmt.Errorf("nl: grounding the question: %w", err)
+		}
+		s.ask += grounded(pr.Grounded, s.cands)
+	}
+	s.tries = o.MaxTries
+	if s.tries <= 0 {
+		s.tries = 3
+	}
+	switch {
+	case o.NoGrammar:
+	case o.Grammar != "":
+		s.answerGrammar = o.Grammar
+	case o.FrontEnd != nil:
+		s.answerGrammar, err = o.FrontEnd.Grammar(v)
+	default:
+		s.answerGrammar, err = GrammarFor(v)
+	}
+	if err != nil {
+		return nil, err
+	}
+	s.grammar = s.answerGrammar
+	if o.Actions != nil {
+		s.grammar = actionGrammar(s.grammar, g != nil)
+	}
+	return s, nil
+}
+
+// Pick is the session's first step when the pack lists Callables (#484): the model picks one call
+// that answers the question alone, or replies ActionNone. Its prompt, grammar and judging are a
+// pick's, its replies are jaala's text whatever the FrontEnd, and it takes no actions. It is nil when
+// the pack lists no Callables.
+func (s *Session) Pick() (*Session, error) {
+	if s.o.Pack == nil || len(s.o.Pack.Callables) == 0 {
+		return nil, nil
+	}
+	cs := s.o.Pack.Callables
+	prefix, err := pickPrefix(cs, s.v, s.o.Pack)
+	if err != nil {
+		return nil, err
+	}
+	grammar := ""
+	if !s.o.NoGrammar {
+		if grammar, err = pickGrammar(cs, s.v); err != nil {
+			return nil, err
+		}
+	}
+	p := *s
+	p.o.FrontEnd, p.o.Actions = nil, nil
+	p.prefix, p.grammar, p.answerGrammar = prefix, grammar, grammar
+	p.tries, p.pick = pickTries, true
+	return &p, nil
+}
+
+// Prefix is what every prompt of the session starts with, the same for every question over one
+// vocabulary and options, so a client can cache it.
+func (s *Session) Prefix() string { return s.prefix }
+
+// Ask is the question as the model is first asked it, with the values its names were grounded to.
+func (s *Session) Ask() string { return s.ask }
+
+// Candidates are what grounding found for the question's names.
+func (s *Session) Candidates() []Candidate { return s.cands }
+
+// Grammar is the GBNF an answer is held to, "" when Options.NoGrammar is set.
+func (s *Session) Grammar() string { return s.answerGrammar }
+
+// ActionGrammar is Grammar with the text actions around it (Options.Actions), for a model that writes
+// an action as its reply rather than calling it as a tool; Grammar when there are no actions.
+func (s *Session) ActionGrammar() string { return s.grammar }
+
+// MaxTries is how many answers a model gets in one Conversation before it ends.
+func (s *Session) MaxTries() int { return s.tries }
+
+// MaxSteps is how many actions a model may take before it must answer, 0 without Options.Actions.
+func (s *Session) MaxSteps() int {
+	if s.o.Actions == nil {
+		return 0
+	}
+	return s.o.Actions.steps()
+}
+
+// Act runs one action (ActionLook, ActionValues, ActionTry or ActionFind) and returns what goes back
+// to the model. The text values its result shows are kept, so a later answer guessing one's spelling
+// can be repaired. A bad argument is answered in the text, never as an error, since the model reads
+// it. It needs Options.Actions.
+func (s *Session) Act(ctx context.Context, action, arg string) string {
+	result, seen := act(ctx, action, arg, s.v, s.o)
+	s.mem.see(seen)
+	return result
+}
+
+// Draw judges one more answer to the question outside any conversation, as a vote draws one: the
+// try's Text is checked, compiled and run as an answer is, and the try comes back with Err and Kind
+// set when it was refused. try carries the model's reply: Model, Text and what it cost.
+func (s *Session) Draw(ctx context.Context, try Try) (Try, Program, error) {
+	try = s.reply(try)
+	return check(ctx, try, s.v, s.o, 0)
+}
+
+// Key is what two accepted answers agree on: their rows as a multiset of values when Options.Base ran
+// them, or else the program they compiled to.
+func (s *Session) Key(p Program) string { return voteKey(p, s.o.Base != nil) }
+
+// reply is try with the model's reply unfenced and the session's language and explainer set.
+func (s *Session) reply(try Try) Try {
+	if s.o.FrontEnd != nil {
+		try.Language = s.o.FrontEnd.Language()
+	}
+	try.Text = unfence(try.Text)
+	text := try.Text
+	try.explain = func(err error) string { return Explain(text, err) }
+	return try
+}
+
+// A Conversation is one model's turn at the question: it judges each reply against what that model
+// was told before. A fallback model starts a new one, since it doesn't read the first model's drafts.
+type Conversation struct {
+	s       *Session
+	ask     string
+	last    bool // no model is left after this one
+	refused map[string]error
+	why     map[string]string // what each refused draft was told, in its own language
+	reasked bool              // a repeated empty draft was asked again (#483)
+	tries   int
+}
+
+// NewConversation starts a model's turn. after is why the previous model's turn ended, nil for the
+// first, and last says no model follows this one: an empty answer then goes back to this model
+// rather than ending its turn.
+func (s *Session) NewConversation(after error, last bool) *Conversation {
+	c := &Conversation{s: s, ask: s.ask, last: last, refused: map[string]error{}, why: map[string]string{}}
+	if !s.pick {
+		s.mem.facts, s.mem.last = nil, ""
+		if after != nil && errors.Is(after, errEmpty) {
+			c.ask += "\n\n" + s.pr.EmptyFallback
+		}
+	}
+	return c
+}
+
+// Ask is the conversation's first message: the session's, and after an empty answer ended the last
+// model's turn, a line saying so.
+func (c *Conversation) Ask() string { return c.ask }
+
+// Compact is the one message Actions.Compact sends in place of the conversation so far: the question,
+// what the actions found, each refused answer on a line, and the last refusal whole.
+func (c *Conversation) Compact() []Turn { return c.s.mem.compact(c.ask) }
+
+// Noted records an action the model took and what it was told, for Compact.
+func (c *Conversation) Noted(reply, result string) {
+	c.s.mem.facts = append(c.s.mem.facts, fact(reply, result))
+}
+
+// A Verdict is what a Conversation makes of one reply. Exactly one of Program, Continue and Stop is
+// set.
+type Verdict struct {
+	// Program is the accepted answer.
+	Program *Program
+	// Continue is what the model is told next, as the user's message, when the answer was refused and
+	// the model has tries left.
+	Continue string
+	// Stop ends the model's turn without an answer: it repeated a draft it was told was wrong, its
+	// answer was empty while another model is left, it ran out of tries, or, for a pick, it replied
+	// ActionNone (ErrNoCall). It wraps the last refusal.
+	Stop error
+	// Tries are the tries to record, in order: the reply's, and after it a repair of it.
+	Tries []Try
+}
+
+// ErrNoCall is a pick's Stop when the model replied ActionNone: no callable answers the question.
+var ErrNoCall = errors.New("nl: no callable answers the question")
+
+// Judge judges a reply that is an answer, not an action. try carries the model's reply: Model, Text
+// (a Markdown fence is taken off) and what it cost.
+func (c *Conversation) Judge(ctx context.Context, try Try) Verdict {
+	s := c.s
+	try = s.reply(try)
+	if s.pick {
+		return c.judgePick(ctx, try)
+	}
+	c.tries++
+	var p Program
+	var err error
+	if prev, ok := c.refused[try.Text]; ok {
+		err = fmt.Errorf("the same draft as before: %w", prev)
+		try.Err, try.Kind = err, KindRepeat
+	} else {
+		try, p, err = check(ctx, try, s.v, s.o, 0)
+	}
+	var tries []Try
+	if err != nil && s.o.Actions != nil && repairable(try) {
+		// a guessed spelling of a value the conversation has seen: fixed here, not by the model
+		if text, what, ok := s.mem.repair(try.Text, domainOf(try.Err, s.v)); ok {
+			rtry, rp, rerr := check(ctx, Try{Model: try.Model, Language: try.Language, Text: text, Repair: what,
+				explain: func(err error) string { return Explain(text, err) }}, s.v, s.o, 0)
+			if rerr == nil {
+				tries = append(tries, try)
+				try, p, err = rtry, rp, nil
+			}
+		}
+	}
+	if err == nil {
+		return Verdict{Program: &p, Tries: append(tries, try)}
+	}
+	what := "program"
+	if s.o.FrontEnd != nil {
+		what = "query"
+	}
+	if try.Kind == KindRepeat && !c.reasked && errors.Is(err, errEmpty) {
+		// a small model resends the draft it just wrote after an empty answer: once per turn it is told
+		// again, more pointedly, rather than losing its remaining tries (#483)
+		c.reasked = true
+		try.Reasked = true
+		msg := reask(s.pr, what, c.why[try.Text], err, s.o.FrontEnd != nil, s.cands)
+		s.mem.facts = append(s.mem.facts, fact(try.Text, "repeated, and answered nothing again"))
+		s.mem.last = try.Text + "\n" + msg
+		return c.next(append(tries, try), msg, err)
+	}
+	if try.Kind == KindRepeat || try.Kind == KindEmpty && !c.last {
+		return Verdict{Stop: err, Tries: append(tries, try)}
+	}
+	c.refused[try.Text] = err
+	fix := fmt.Sprintf(s.pr.Fix, what)
+	if try.Kind == KindEmpty {
+		fix = fmt.Sprintf(s.pr.FixEmpty, what)
+	}
+	told := strings.TrimRight(try.explain(err), "\n")
+	c.why[try.Text] = told
+	s.mem.facts = append(s.mem.facts, fact(try.Text, "refused ("+try.Kind+"): "+strings.Join(strings.Fields(told), " ")))
+	s.mem.last = try.Text + "\n" + told + "\n\n" + fix
+	return c.next(append(tries, try), told+"\n\n"+fix, err)
+}
+
+// next continues with msg, or stops on err once the model has used its tries.
+func (c *Conversation) next(tries []Try, msg string, err error) Verdict {
+	if c.tries >= c.s.tries {
+		return Verdict{Stop: err, Tries: tries}
+	}
+	return Verdict{Continue: msg, Tries: tries}
+}
+
+// judgePick judges a pick's reply: ActionNone stops with ErrNoCall and no try, and a refused call,
+// a repeated one included, goes back with why and PickRetry while tries are left.
+func (c *Conversation) judgePick(ctx context.Context, try Try) Verdict {
+	try.Mode = ModeCall
+	if try.Text == ActionNone {
+		return Verdict{Stop: ErrNoCall}
+	}
+	c.tries++
+	var p Program
+	var err error
+	if prev, ok := c.refused[try.Text]; ok {
+		err = fmt.Errorf("the same draft as before: %w", prev)
+		try.Err, try.Kind = err, KindRepeat
+	} else {
+		try, p, err = check(ctx, try, c.s.v, c.s.o, 0)
+	}
+	if err == nil {
+		return Verdict{Program: &p, Tries: []Try{try}}
+	}
+	c.refused[try.Text] = err
+	why := strings.TrimRight(try.explain(err), "\n")
+	return c.next([]Try{try}, why+"\n\n"+c.s.pr.PickRetry, err)
+}

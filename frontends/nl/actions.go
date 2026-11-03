@@ -2,7 +2,6 @@ package nl
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"regexp"
 	"strconv"
@@ -281,9 +280,6 @@ func valuesProgram(v *ns.Vocabulary, target string, limit int) (string, error) {
 	args[at] = "?v"
 	return fmt.Sprintf("%s(%s) => ?v limit %d", rel, strings.Join(args, ", "), limit), nil
 }
-
-// errAction is draft's error for a reply that was an action, which Translate answers and goes on.
-var errAction = errors.New("an action, not an answer")
 
 // actionGrammar wraps a draft's grammar so a reply is an action or a draft: the draft grammar's root
 // becomes program, a NAME or TARGET is a dotted name of nameMax characters at most, which look and

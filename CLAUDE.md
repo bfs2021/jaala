@@ -144,7 +144,14 @@ GOARCH=wasm go test ./ns` (#417 ran `ns` that way).
   Every piece of text jaala writes into a prompt is a `Prompts` field (`prompts.go`, #485) a pack
   replaces word for word, read through `Pack.prompts()` (nil-safe, field by field over
   `DefaultPrompts`); a new piece of prompt text goes there too, with a test in `prompts_test.go`. Its
-  templates (`templates()`) are checked by `Pack.Validate` and up front in `translate`.
+  templates (`templates()`) are checked by `Pack.Validate` and up front in `NewSession`.
+  `translate` is a loop over an `nl.Session` (`session.go`, #496), the question's half that is jaala's:
+  `NewSession` writes the prefix, grounds and picks the grammar, `Act` runs an action, `Draw` and `Key`
+  judge and key a vote's draw, `Pick` is the callables' first step, and a `Conversation` per model
+  judges each reply into a `Verdict` (the accepted `Program`, `Continue` with what to tell the model,
+  or `Stop`), shaped like chakra's `TurnEndVerdict` without importing it. The loop keeps only calling
+  the Model, the step cap, the vote, escalation, the budget and `Abstain`; #496's second PR moves those
+  onto a chakra Runner in `nlmodels/translator`. A change to how a reply is judged goes in `session.go`.
 - **`nl.Grammar()` is GBNF built from a rule table** (`frontends/nl/grammar.go`, #323), and every text it
   accepts must parse: `TestEveryProgramTheGrammarWritesParses` samples 21,000 programs from the table
   over 70 seeds and every depth (one seed alone missed `-(9)` as a column). The other direction lives
