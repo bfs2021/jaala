@@ -104,6 +104,20 @@ The Model asks the provider what it can send (`agent.CapabilitiesOf`), and sends
 {{ includeFileText "examples/guide/localmodel_test.go" }}
 ```
 
+Most hosts want the tuning that goes with a model as well as the model, so `nlmodels/translator` puts the two together ([#490](https://github.com/panyam/jaala/issues/490)). `translator.New(v, pack, cfg)` takes the vocabulary, the pack and a `Config` naming the providers, and `Ask(ctx, question)` translates as `Translate` does:
+
+```go
+t, err := translator.New(v, pack, translator.Config{
+	Model:    translator.Role{Provider: local},
+	Fallback: translator.Role{Provider: frontier, NoTemperature: true}, // Anthropic refuses a temperature
+	Base:     base,
+	Vote:     &nl.Vote{Drafts: 3},
+})
+p, tr, err := t.Ask(ctx, "which tests reach the billing package?")
+```
+
+jaala picks what each role is sent. The model gets temperature 0 and the fallback 0.7, since the fallback is only asked once the model has failed. Both reply in at most 512 tokens. A role marked `Thinking` is a reasoning model, so it gets 3072 tokens and no grammar, which would hold the reply to a program from its first token, plus a line asking it to think the question through and put the program in a fenced block. Only the last fenced block outside `<think>` counts as its draft. A `Role` can replace any of these, `Config.Options` edits the `nl.Options` last for anything `Config` doesn't name, and `Model()` and `Fallback()` hand the tuned models to [jaala's MCP server](#serving-agents) for its `ask` tool.
+
 ## Domain packs
 
 The card says what a program can call, but not what the data holds or what a question in this domain usually looks like. A host says that once, in an `nl.Pack` passed as `Options.Pack` ([#344](https://github.com/panyam/jaala/issues/344)), so Declaire's code graph and Agni's schematics are each a pack over the same `Translate`:
