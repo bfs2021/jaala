@@ -29,8 +29,13 @@ func (r *recorder) Generate(_ context.Context, req agent.ProviderRequest) (*agen
 	return &agent.ProviderResponse{Text: r.replies[len(r.reqs)-1]}, nil
 }
 
-func (r *recorder) Stream(context.Context, agent.ProviderRequest) (agent.Stream, error) {
-	return nil, errors.New("not streamed")
+// Stream plays the next reply as the Runner's steps read one, through a one-shot StubProvider.
+func (r *recorder) Stream(ctx context.Context, req agent.ProviderRequest) (agent.Stream, error) {
+	res, err := r.Generate(ctx, req)
+	if err != nil {
+		return nil, err
+	}
+	return agent.NewStubProvider(agent.StubTurn{Text: res.Text}).Stream(ctx, req)
 }
 
 func (r *recorder) ProviderCapabilities() agent.Capabilities { return r.caps }

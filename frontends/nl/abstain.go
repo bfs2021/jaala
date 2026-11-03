@@ -59,11 +59,15 @@ func (a *Abstained) Error() string {
 
 func (a *Abstained) Unwrap() error { return a.Err }
 
-// errNoProgram is Translate running out of tries with no draft accepted.
-var errNoProgram = errors.New("nl: no program checked")
+// ErrNoProgram is what a translation fails with when every model ran out of tries, or stopped,
+// with no draft accepted: Translate's error wraps it, and so must another loop's for Abstain.Judge
+// to read it as no answer.
+var ErrNoProgram = errors.New("nl: no program checked")
 
-// judge turns what Translate would return into an abstention when a's policy says so.
-func (a *Abstain) judge(p Program, tr Trace, err error) (Program, Trace, error) {
+// Judge turns what a translation would return into an abstention when a's policy says so: Translate
+// passes its result through it, and another loop over a Session passes its own. A nil a returns
+// them unchanged.
+func (a *Abstain) Judge(p Program, tr Trace, err error) (Program, Trace, error) {
 	if a == nil {
 		return p, tr, err
 	}
@@ -78,7 +82,7 @@ func (a *Abstain) judge(p Program, tr Trace, err error) (Program, Trace, error) 
 		if a.Budget {
 			return Program{}, tr, closest(AbstainBudget, tr, err)
 		}
-	case errors.Is(err, errNoProgram):
+	case errors.Is(err, ErrNoProgram):
 		n := len(tr.Tries)
 		if !a.NoAnswer || n > 0 && tr.Tries[n-1].Kind == KindModel {
 			break

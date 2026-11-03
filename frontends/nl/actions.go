@@ -35,6 +35,11 @@ type Actions struct {
 	// what it has found: each action with its result, each refused answer on a line, and the last
 	// refusal whole. A small model's drafts get worse as its context grows (#393).
 	Compact bool
+	// AsTools says the caller offers the actions as tools of its own (Session.Tools), as nlmodels'
+	// translator does on a chakra Runner (#496), rather than reading them from a reply: the prefix
+	// leaves out Prompts.Actions, and ActionGrammar is Grammar. Translate offers no tools, so under it
+	// a model then takes no actions.
+	AsTools bool
 }
 
 // A Prober is a FrontEnd's side of Actions: look and values in its language. A front end that isn't
@@ -65,6 +70,9 @@ const (
 	ActionTry    = "try"
 	ActionFind   = "find"
 )
+
+// replies says the model asks for an action in its reply: Actions are set and not AsTools.
+func (a *Actions) replies() bool { return a != nil && !a.AsTools }
 
 func (a *Actions) steps() int {
 	if a.Steps > 0 {

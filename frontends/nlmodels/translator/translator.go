@@ -68,16 +68,18 @@ type Config struct {
 	Abstain  *nl.Abstain
 	Budget   nl.Budget
 	// Options, when set, edits the nl.Options Ask uses after everything above is filled in, for what
-	// Config doesn't name (a front end, a goal-only grammar, Eval options). What it sets wins.
+	// Config doesn't name (a front end, a goal-only grammar, Eval options). What it sets wins, but
+	// for its Fallback, which Ask ignores: the fallback is Config.Fallback's role.
 	Options func(*nl.Options)
 }
 
 // A Translator answers questions over one vocabulary and pack with the models a Config names. It is
 // safe for concurrent use as long as its providers are.
 type Translator struct {
-	v               *ns.Vocabulary
-	opts            nl.Options
-	model, fallback nl.Model
+	v                   *ns.Vocabulary
+	opts                nl.Options
+	model, fallback     *role
+	nlModel, nlFallback nl.Model // the roles as nl.Models, for frontends/mcp's Options.Model
 }
 
 // New is a Translator over v and pack. It fails when cfg names no Model provider. pack may be nil.
@@ -85,31 +87,40 @@ func New(v *ns.Vocabulary, pack *nl.Pack, cfg Config) (*Translator, error) {
 	if cfg.Model.Provider == nil {
 		return nil, errors.New("translator: Config.Model needs a Provider")
 	}
-	t := &Translator{v: v, model: cfg.Model.build("model", ModelTemperature)}
+	t := &Translator{v: v, model: cfg.Model.runtime("model", ModelTemperature), nlModel: cfg.Model.build("model", ModelTemperature)}
 	o := nl.Options{Pack: pack, Base: cfg.Base, Actions: cfg.Actions, Vote: cfg.Vote, Escalate: cfg.Escalate, Abstain: cfg.Abstain, Budget: cfg.Budget}
 	if cfg.Fallback.Provider != nil {
-		t.fallback = cfg.Fallback.build("fallback", FallbackTemperature)
-		o.Fallback = t.fallback
+		t.fallback = cfg.Fallback.runtime("fallback", FallbackTemperature)
+		t.nlFallback = cfg.Fallback.build("fallback", FallbackTemperature)
 	}
 	if cfg.Options != nil {
 		cfg.Options(&o)
 	}
+	if o.Actions != nil {
+		a := *o.Actions
+		a.AsTools = true
+		o.Actions = &a
+	}
+	o.Fallback = nil // the fallback is the Translator's own Runner
 	t.opts = o
 	return t, nil
 }
 
-// Ask translates question with nl.Translate: the pack's grounder, examples and checks, the model and
-// then the fallback, and the Config's options. The Trace holds every try, also when Ask fails.
+// Ask translates question on chakra Runners (#496): the pack's grounder, examples and checks, the
+// model and then the fallback, each a turn whose replies an nl.Session judges, with the Config's
+// actions as tools, its vote as an agent.Consensus and its budget as the turn's. The Trace holds
+// every try, also when Ask fails, and Abstain turns what its policy covers into an *nl.Abstained.
 func (t *Translator) Ask(ctx context.Context, question string) (nl.Program, nl.Trace, error) {
-	return nl.Translate(ctx, question, t.v, nil, t.model, t.opts)
+	p, tr, err := t.run(ctx, question)
+	return t.opts.Abstain.Judge(p, tr, err)
 }
 
-// Model is the first model as Ask asks it, with jaala's tuning applied, for a host handing it to
+// Model is the first model with jaala's tuning applied, as an nl.Model, for a host handing it to
 // frontends/mcp's Options.Model.
-func (t *Translator) Model() nl.Model { return t.model }
+func (t *Translator) Model() nl.Model { return t.nlModel }
 
-// Fallback is the fallback as Ask asks it, nil when the Config names none.
-func (t *Translator) Fallback() nl.Model { return t.fallback }
+// Fallback is the fallback as an nl.Model, nil when the Config names none.
+func (t *Translator) Fallback() nl.Model { return t.nlFallback }
 
 // build is r as an nl.Model, with the role's defaults where r leaves them.
 func (r Role) build(label string, temp float64) nl.Model {
