@@ -98,7 +98,8 @@ GOARCH=wasm go test ./ns` (#417 ran `ns` that way).
   `Translate` (#325) runs no model: `Model` and `Grounder` are the host's, a refused draft goes back
   with `Explain`'s text, a `Complete` error, a repeated draft (#340, refused unchecked) or an empty
   answer (over `Options.Base`) moves straight to the fallback, which starts a fresh conversation (an
-  empty answer with no fallback left goes back to the model), and `Try.Kind` adds `parse`, `eval`,
+  empty answer with no fallback left goes back to the model, and its first repeat of that draft is
+  asked again with the reason, the call to change and the grounded values, `Try.Reasked`, #483), and `Try.Kind` adds `parse`, `eval`,
   `empty`, `repeat` and `model` to a `CheckError`'s kinds. An unknown call's `Fix` names the program's
   own rule it likely means (`localFix`, #341, at `Validate` and `evaluate`, since the vocabulary's
   suggestion can't see the rules). Its tests script the model (`scripted`), so tries are exact.
