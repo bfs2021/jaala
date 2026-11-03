@@ -120,6 +120,7 @@ const (
 	ClassSemantics = "semantics" // it answered, but the pack's Check, or the case's rows, said wrong
 	ClassBudget    = "budget"    // the Budget, or the evaluation's, ran out
 	ClassModel     = "model"     // the Model failed
+	ClassAbstained = "abstained" // Translate abstained (Options.Abstain): not a wrong answer, and no answer
 )
 
 // Class sorts a refused try by what went wrong, "" for one accepted. A repeated draft is classed by

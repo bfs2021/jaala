@@ -350,3 +350,26 @@ func TestAnEmptyAnswerCarriesThePacksHint(t *testing.T) {
 		t.Errorf("control: an answer with rows:\n%s", text)
 	}
 }
+
+// With Abstain, a question no draft answered comes back as an ordinary answer saying ask isn't
+// confident, with the closest draft and why it wasn't taken. control: without it, a tool error; and a
+// model that fails is a tool error either way.
+func TestAskSaysWhenItIsNotConfident(t *testing.T) {
+	abstain := &nl.Abstain{NoAnswer: true}
+	small := &scripted{name: "small", replies: []string{`nowhere(?t) => ?t`, `nowhere(?t) => ?t`}}
+	res := call(t, dial(t, pack, mcp.Options{Model: small, Abstain: abstain}), "ask", map[string]any{"question": "which town is next after a?"})
+	text := res.Content[0].Text
+	for _, want := range []string{"not confident (repeat): no answer.", "closest draft, from small:\n  nowhere(?t) => ?t", "why it wasn't taken:\n  ", "nowhere", "2. small: repeat"} {
+		if res.IsError || !strings.Contains(text, want) {
+			t.Errorf("ask lacks %q (error %v):\n%s", want, res.IsError, text)
+		}
+	}
+	small = &scripted{name: "small", replies: []string{`nowhere(?t) => ?t`, `nowhere(?t) => ?t`}}
+	if res := call(t, dial(t, pack, mcp.Options{Model: small}), "ask", map[string]any{"question": "which town is next after a?"}); !res.IsError {
+		t.Errorf("control: without Abstain, %+v", res.Content)
+	}
+	down := &scripted{name: "small"}
+	if res := call(t, dial(t, pack, mcp.Options{Model: down, Abstain: abstain}), "ask", map[string]any{"question": "which town is next after a?"}); !res.IsError {
+		t.Errorf("control: a model that fails, %+v", res.Content)
+	}
+}

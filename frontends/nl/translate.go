@@ -114,6 +114,9 @@ type Options struct {
 	Escalate float64
 	// Budget caps the tokens and time Translate spends on the question.
 	Budget Budget
+	// Abstain, when set, says when Translate returns an *Abstained, "not confident" with the closest
+	// draft, in place of an answer its vote disputes or a failure to answer (#482). Off by default.
+	Abstain *Abstain
 
 	grounder Grounder // the Grounder a find action asks
 }
@@ -199,8 +202,14 @@ const instructions = `
 // the fallback, or, when there is none left, back to the model to try other members or values. g,
 // when not nil, grounds the question's names first, and o.Pack's Grounder does when g is nil. A pack
 // whose examples don't check fails Translate before any model is asked. The Trace holds every try, also when Translate fails, and the error
-// then wraps the last try's.
+// then wraps the last try's. With o.Abstain, an answer or failure its policy covers comes back as an
+// *Abstained instead.
 func Translate(ctx context.Context, question string, v *ns.Vocabulary, g Grounder, m Model, o Options) (Program, Trace, error) {
+	p, tr, err := translate(ctx, question, v, g, m, o)
+	return o.Abstain.judge(p, tr, err)
+}
+
+func translate(ctx context.Context, question string, v *ns.Vocabulary, g Grounder, m Model, o Options) (Program, Trace, error) {
 	var tr Trace
 	if o.Pack != nil && g == nil {
 		g = o.Pack.Grounder
@@ -347,7 +356,7 @@ func Translate(ctx context.Context, question string, v *ns.Vocabulary, g Grounde
 	if held != nil {
 		return *held, tr, nil
 	}
-	return Program{}, tr, fmt.Errorf("nl: no program checked after %d tries: %w", len(tr.Tries), last)
+	return Program{}, tr, fmt.Errorf("%w after %d tries: %w", errNoProgram, len(tr.Tries), last)
 }
 
 // errLowAgreement is an answer whose vote agreed less than Options.Escalate asks.

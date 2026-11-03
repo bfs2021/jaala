@@ -40,13 +40,16 @@ type Result struct {
 func (r Result) FirstTry() bool { return r.Pass && len(r.Trace.Tries) == 1 }
 
 // Class sorts a failed case by what went wrong (ClassGrounding and the rest), "" for one that
-// passed: the budget when it ran out, the last try's class when Translate failed, and semantics for a
-// program that answered the wrong rows.
+// passed: abstained when Translate abstained (Options.Abstain), the budget when it ran out, the last
+// try's class when Translate failed, and semantics for a program that answered the wrong rows.
 func (r Result) Class() string {
 	var bs *BudgetSpent
+	var ab *Abstained
 	switch {
 	case r.Pass:
 		return ""
+	case errors.As(r.Err, &ab):
+		return ClassAbstained
 	case errors.As(r.Err, &bs):
 		return ClassBudget
 	case len(r.Trace.Tries) == 0:
