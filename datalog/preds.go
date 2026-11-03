@@ -60,6 +60,9 @@ func extendBuiltin(bi ns.Builtin, atom *Atom, bnd *binding, b *Base, yield func(
 	}
 	args := make([]ns.Arg, len(atom.Args))
 	for i, a := range atom.Args {
+		if i < len(bi.Aliased) && bi.Aliased[i] && a.Const == nil {
+			continue // bound at run time or not, matched against what Gen lists by unify below (#480)
+		}
 		v, ok := resolve(a, bnd)
 		args[i] = ns.Arg{Value: v, Bound: ok}
 	}

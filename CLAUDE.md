@@ -1157,7 +1157,10 @@ GOARCH=wasm go test ./ns` (#417 ran `ns` that way).
   wants a `demos/reference/builtins-*.yaml` calling it, and a new error message the catalogue. Each line
   is prompt cost for every `nl.Translate` call (#360's six took `TestEval` from 10,401 tokens to
   14,190), so keep a builtin's `Doc` short. A text function is a relation with its result last, like
-  `num.*`, so expressions take it with no engine change; an absent input gives no row. When a test
+  `num.*`, so expressions take it with no engine change; an absent input gives no row. An argument taking
+  values its enumeration never lists (`str.split`'s and `str.find`'s negative index) is marked
+  `ns.Builtin.Aliased` (#480): `extendBuiltin` passes it bound only when the atom writes a constant,
+  so a value a join or the demand rewrite binds is matched against the listed rows. When a test
   marks a value unbound by comparing with `ns.Value{}`, `ns.S("")` is that value too.
 - Fixtures: `workloads`, `binaryTree`, `pointerProgram` and `netlistOf` (synthetic, agni-sized) in
   `bench_test.go`; `graph()` and the `eval`/`evalErr`/`col`/`std`/`baseFor` helpers in `helpers_test.go`;

@@ -183,6 +183,23 @@ func TestAGeneratorMustDeclareItsModes(t *testing.T) {
 	}
 }
 
+// An Aliased argument is never passed a value bound while the query runs (#480), so no mode may need
+// one, and only a generator's arguments can be one. control: one no mode requires is accepted.
+func TestAnAliasedArgumentIsOneNoModeRequires(t *testing.T) {
+	gen := func(_ context.Context, src Source, args []Arg, emit func([]Value, []string) error) error { return nil }
+	v := MustVocabulary(nil)
+	wantErr(t, v.AddPredicate("pick", Builtin{Arity: 2, Modes: [][]bool{{true, false}, {false, true}}, Aliased: []bool{false, true}, Gen: gen}),
+		`generator "pick" has a mode requiring argument 2, which is Aliased`)
+	wantErr(t, v.AddPredicate("pick", Builtin{Arity: 2, Modes: [][]bool{{true, false}}, Aliased: []bool{true}, Gen: gen}),
+		`generator "pick" marks 1 positions Aliased, want 2`)
+	f := Filter(1, func([]Value) (bool, error) { return true, nil })
+	f.Aliased = []bool{true}
+	wantErr(t, v.AddPredicate("pos", f), `filter "pos" marks arguments Aliased; only a generator's can be`)
+	if err := v.AddPredicate("pick", Builtin{Arity: 2, Modes: [][]bool{{true, false}}, Aliased: []bool{false, true}, Gen: gen}); err != nil {
+		t.Errorf("control: %v", err)
+	}
+}
+
 func TestSatisfiedReadsEachMode(t *testing.T) {
 	gen := Builtin{Arity: 2, MaxArity: 3, Modes: [][]bool{{true, false, false}, {false, true, true}}, Gen: func(context.Context, Source, []Arg, func([]Value, []string) error) error { return nil }}
 	for _, c := range []struct {

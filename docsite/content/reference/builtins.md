@@ -73,7 +73,7 @@ Like `num.add` it runs from any two of its three values, so given the text and o
 
 {{ demo "demos/reference/builtins-split.yaml" }}
 
-Given an index it gives that part alone, and a negative index counts from the end: -1 is the last part, which is a qualified name's own name, and -2 the one before it. An index past either end gives no row:
+Given an index it gives that part alone, and a negative index counts from the end: -1 is the last part, which is a qualified name's own name, and -2 the one before it. An index past either end gives no row. Counting from the end works only for an index the call writes (or a host binds). One that comes from data, or from a rule's caller, matches the parts' indices from 0, so a -1 there gives no row ([#480](https://github.com/panyam/jaala/issues/480)):
 
 {{ demo "demos/reference/builtins-split-last.yaml" }}
 
