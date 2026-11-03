@@ -124,8 +124,10 @@ GOARCH=wasm go test ./ns` (#417 ran `ns` that way).
   by construction), keeps the rows most agree on (`voteKey`, a refused draft agreeing with nothing),
   and sets `Program.Confidence`; `Options.Escalate` moves a disputed answer to the fallback, keeping it
   if nothing better comes (`Trace.Escalations`); `Options.Budget` caps tokens and time
-  (`*BudgetSpent`). `Try.Class` and `Result.Class` sort failures as grounding, construct,
-  semantics, budget or model, reading a `CheckError` before `KindAnswer`, since datalog's order-by
+  (`*BudgetSpent`). `Options.Abstain` (`abstain.go`, #482) turns a disputed answer, running out of
+  tries or the budget into an `*Abstained` with the closest draft; `Translate` is `translate` passed
+  through `Abstain.judge`, and a model failing never abstains. `Try.Class` and `Result.Class` sort failures as grounding, construct,
+  semantics, budget or model (and a case as `abstained`), reading a `CheckError` before `KindAnswer`, since datalog's order-by
   kind is spelled `answer` too; `Report.Failures` counts them, outside `String`, so goldens hold.
   With `Actions`, `state.go`'s `memory` keeps the text values actions showed (`act` returns them), and
   a draft refused as empty or for a constant (`repairable`) has each quoted value the data holds in
@@ -175,7 +177,7 @@ GOARCH=wasm go test ./ns` (#417 ran `ns` that way).
   instructions are written from the pack (`mcp.Instructions`, sent with mcpkit's `WithInstructions`,
   which mcpkit v0.8.2 put on the initialize result where clients read it: before, Claude Code saw
   none) unless `Pack.Instructions` replaces them word for word, which declaire#308's wording runs
-  use. `Options.Server` (#474) are a host's own mcpkit options, applied after those, so the host's
+  use. `Options.Abstain` (#482) answers an abstained `ask` as an ordinary result, not a tool error. `Options.Server` (#474) are a host's own mcpkit options, applied after those, so the host's
   wins, a `WithInstructions` included (agni's `WithListTTLMs`; unset, mcpkit sends `ttlMs: 0`, not nothing). A host adds its own tools on the returned server and writes answers with `Pack.Format`, and
   `Pack.Data` (#469) as structured content, which must be a JSON object and replaces the `json` shape.
   `query` and `explain` take `bind` (`bind.values`, then `option` into `datalog.Bind`; a list ranges a

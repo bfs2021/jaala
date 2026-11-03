@@ -70,6 +70,10 @@ type Options struct {
 	// Model, when set, offers the ask tool, which translates through it, and Fallback is the model
 	// asked after it (nl.Options.Fallback). The ask tool's mode picks either alone.
 	Model, Fallback nl.Model
+	// Abstain, when set, is the ask tool's nl.Options.Abstain (#482): a question it abstains on is
+	// answered "not confident", with the reason and the closest draft for the caller to finish, as
+	// an ordinary answer rather than a tool error. A model that fails is still a tool error.
+	Abstain *nl.Abstain
 	// Limit is the most rows a call returns, 100 when 0; a call may ask for fewer.
 	Limit int
 	// MaxWork caps every call's work (datalog.Budget), and a call may ask for less; 0 is no cap.
