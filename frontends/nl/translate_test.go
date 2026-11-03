@@ -217,6 +217,65 @@ func TestTranslateMovesOnFromARepeatedDraft(t *testing.T) {
 	}
 }
 
+// A model resending a draft that answered nothing is asked again once, told what it was told before,
+// the call to change and the grounded values (#483); the repeat is still a Try, marked Reasked.
+// control: a second repeat in the turn ends it, and the first repeat is the only one asked again.
+func TestTranslateAsksAgainWhenAnEmptyDraftIsRepeated(t *testing.T) {
+	v := vocabulary(t)
+	b := graphBase(t, v)
+	g := &grounder{cands: []nl.Candidate{{Name: "a", Values: []string{"a"}}}}
+	pack := &nl.Pack{Hint: func(context.Context, *datalog.EmptyReport) string { return `nodes are "a" to "c"` }}
+	empty, fixed := `edge("a", ?x), edge(?x, "zz") => ?x`, `edge("a", ?x), edge(?x, "c") => ?x`
+	m := model("small", empty, empty, fixed)
+	p, tr, err := nl.Translate(context.Background(), "what leads from a to zz?", v, g, m, nl.Options{Base: b, Pack: pack})
+	if err != nil || p.Text != fixed {
+		t.Fatalf("Translate = %+v, %v (%v)", p, err, kinds(tr))
+	}
+	if got := kinds(tr); !slices.Equal(got, []string{nl.KindEmpty, nl.KindRepeat, ""}) {
+		t.Errorf("kinds %v", got)
+	}
+	if tr.Tries[0].Reasked || !tr.Tries[1].Reasked || tr.Tries[2].Reasked {
+		t.Errorf("reasked %v %v %v, want only the repeat", tr.Tries[0].Reasked, tr.Tries[1].Reasked, tr.Tries[2].Reasked)
+	}
+	turns := m.asked[2].Turns
+	if len(turns) != 5 || turns[3].Text != empty {
+		t.Fatalf("third prompt's turns %+v", turns)
+	}
+	again := turns[4].Text
+	for _, want := range []string{"same program you sent before", `edge(?x, "zz") matched nothing`, `nodes are "a" to "c"`,
+		"Values the question's names may stand for", "a: \"a\"", "Don't send it again. Change `edge(\"b\", \"zz\")`, which matched nothing,", "write the whole program again"} {
+		if !strings.Contains(again, want) {
+			t.Errorf("the repeat was told %q, missing %q", again, want)
+		}
+	}
+
+	twice := model("small", empty, empty, empty, fixed)
+	_, tr, err = nl.Translate(context.Background(), "q", v, nil, twice, nl.Options{Base: b, MaxTries: 4})
+	if err == nil || len(twice.asked) != 3 || !slices.Equal(kinds(tr), []string{nl.KindEmpty, nl.KindRepeat, nl.KindRepeat}) {
+		t.Errorf("control: a second repeat answered %v after %d asks, kinds %v", err, len(twice.asked), kinds(tr))
+	}
+	if !tr.Tries[1].Reasked || tr.Tries[2].Reasked {
+		t.Errorf("control: reasked %v %v", tr.Tries[1].Reasked, tr.Tries[2].Reasked)
+	}
+}
+
+// A front end's draft repeated after an empty answer is told again in the front end's terms, and
+// pointed at the report rather than at a jaala call it never wrote.
+func TestTranslateAsksAgainInTheFrontEndsTerms(t *testing.T) {
+	v := vocabulary(t)
+	empty, fixed := `SAY edge("c", ?b) => ?b`, `SAY edge("b", ?b) => ?b`
+	m := model("small", empty, empty, fixed)
+	p, tr, err := nl.Translate(context.Background(), "q", v, nil, m, nl.Options{FrontEnd: shout{}, Base: graphBase(t, v)})
+	if err != nil || p.Text != fixed {
+		t.Fatalf("Translate = %+v, %v (%v)", p, err, kinds(tr))
+	}
+	again := m.asked[2].Turns[4].Text
+	if !strings.Contains(again, "same query you sent before") || !strings.Contains(again, "SHOUT ERROR: ") ||
+		!strings.Contains(again, "Change the part the report above names") || strings.Contains(again, "`") {
+		t.Errorf("the repeat was told %q", again)
+	}
+}
+
 // An evaluation error over a Base is fed back as a check error is.
 func TestTranslateFeedsAnEvaluationErrorBack(t *testing.T) {
 	v := vocabulary(t)

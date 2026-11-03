@@ -167,6 +167,11 @@ type Try struct {
 	Report *datalog.Report
 
 	explain func(error) string // how Err goes back to the model, in the draft's language
+	// Reasked marks a repeat of a draft that answered nothing which, being the model's first repeat of
+	// its turn, was sent back with the reason restated rather than ending the turn (#483). A host
+	// counts them to tell whether asking again helped.
+	Reasked bool
+
 	// Repair, for a draft the harness rewrote itself (Options.Actions), says what it changed: a
 	// quoted value the data holds in another spelling the conversation had seen. Text is the
 	// rewritten draft, and the try before it the model's own.
@@ -198,7 +203,8 @@ const instructions = `
 // draft (datalog.Validate), and feeds an error back with Explain's text for m to fix, up to
 // o.MaxTries times, then hands the question to o.Fallback the same way. A draft the model already
 // wrote is refused unchecked and ends its turn (#340: a small model resending one draft spent every
-// retry on it). With o.Base, a program that checks is evaluated too, and one answering nothing goes to
+// retry on it), except the first repeat of one that answered nothing, which is asked again with the
+// reason restated (#483). With o.Base, a program that checks is evaluated too, and one answering nothing goes to
 // the fallback, or, when there is none left, back to the model to try other members or values. g,
 // when not nil, grounds the question's names first, and o.Pack's Grounder does when g is nil. A pack
 // whose examples don't check fails Translate before any model is asked. The Trace holds every try, also when Translate fails, and the error
@@ -221,9 +227,9 @@ func translate(ctx context.Context, question string, v *ns.Vocabulary, g Grounde
 	}
 	spend := &spending{budget: o.Budget, start: time.Now()}
 	ask := question
+	var cands []Candidate
 	if g != nil {
-		cands, err := g.Ground(ctx, question)
-		if err != nil {
+		if cands, err = g.Ground(ctx, question); err != nil {
 			return Program{}, tr, fmt.Errorf("nl: grounding the question: %w", err)
 		}
 		ask += grounded(cands)
@@ -265,6 +271,8 @@ func translate(ctx context.Context, question string, v *ns.Vocabulary, g Grounde
 		}
 		lastModel := k == len(models)-1
 		refused := map[string]error{}
+		why := map[string]string{} // what each refused draft was told, in its own language
+		reasked := false           // a repeated empty draft was asked again (#483)
 		asked := map[string]bool{}
 		steps := 0
 		for t := 0; t < tries; {
@@ -335,28 +343,60 @@ func translate(ctx context.Context, question string, v *ns.Vocabulary, g Grounde
 				return p, tr, nil
 			}
 			last = err
-			if try.Kind == KindModel || try.Kind == KindRepeat || try.Kind == KindEmpty && !lastModel {
-				break
-			}
-			refused[try.Text] = err
 			what := "program"
 			if o.FrontEnd != nil {
 				what = "query"
 			}
+			if try.Kind == KindRepeat && !reasked && errors.Is(err, errEmpty) {
+				// a small model resends the draft it just wrote after an empty answer: once per turn it
+				// is told again, more pointedly, rather than losing its remaining tries (#483)
+				reasked = true
+				tr.Tries[len(tr.Tries)-1].Reasked = true
+				msg := reask(what, why[try.Text], err, o.FrontEnd != nil, cands)
+				mem.facts = append(mem.facts, fact(try.Text, "repeated, and answered nothing again"))
+				mem.last = try.Text + "\n" + msg
+				turns = append(turns, Turn{RoleModel, try.Text}, Turn{RoleUser, msg})
+				continue
+			}
+			if try.Kind == KindModel || try.Kind == KindRepeat || try.Kind == KindEmpty && !lastModel {
+				break
+			}
+			refused[try.Text] = err
 			fix := "Write the whole " + what + " again, fixed."
 			if try.Kind == KindEmpty {
 				fix = "Write the whole " + what + " again, with other members or values."
 			}
-			why := strings.TrimRight(try.explain(err), "\n")
-			mem.facts = append(mem.facts, fact(try.Text, "refused ("+try.Kind+"): "+strings.Join(strings.Fields(why), " ")))
-			mem.last = try.Text + "\n" + why + "\n\n" + fix
-			turns = append(turns, Turn{RoleModel, try.Text}, Turn{RoleUser, why + "\n\n" + fix})
+			told := strings.TrimRight(try.explain(err), "\n")
+			why[try.Text] = told
+			mem.facts = append(mem.facts, fact(try.Text, "refused ("+try.Kind+"): "+strings.Join(strings.Fields(told), " ")))
+			mem.last = try.Text + "\n" + told + "\n\n" + fix
+			turns = append(turns, Turn{RoleModel, try.Text}, Turn{RoleUser, told + "\n\n" + fix})
 		}
 	}
 	if held != nil {
 		return *held, tr, nil
 	}
 	return Program{}, tr, fmt.Errorf("%w after %d tries: %w", errNoProgram, len(tr.Tries), last)
+}
+
+// reask is what a model is told when it resends a draft that answered nothing (#483): that it did, what
+// it was told the first time (told, in the draft's language), the call to change when the empty report
+// names one in jaala's terms, and the grounded values again, since by now they are far back.
+func reask(what, told string, err error, frontEnd bool, cands []Candidate) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "That is the same %s you sent before, and it answers nothing for the same reason:\n\n%s", what, told)
+	b.WriteString(grounded(cands))
+	change := "the part the report above names"
+	var empty *EmptyAnswer
+	if errors.As(err, &empty) && empty.Why != nil && !frontEnd {
+		call := empty.Why.Called
+		if call == "" {
+			call = empty.Why.Literal
+		}
+		change = "`" + call + "`, which matched nothing,"
+	}
+	fmt.Fprintf(&b, "\n\nDon't send it again. Change %s to other members or values, and write the whole %s again.", change, what)
+	return b.String()
 }
 
 // errLowAgreement is an answer whose vote agreed less than Options.Escalate asks.
