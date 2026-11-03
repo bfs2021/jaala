@@ -52,6 +52,10 @@ type Pack struct {
 	// Translate first asks the model to pick one and fill its arguments, and drafts a program only
 	// when it replies none or no call it picks is accepted.
 	Callables []Callable
+	// Prompts, when set, replaces the text jaala writes around the pack's own, field by field (#485):
+	// the instructions after the card, the action loop's, the feedback lines, the pick's and Extract's.
+	// nil, or a field left "", keeps jaala's (DefaultPrompts).
+	Prompts *Prompts
 	// ExtractExamples are texts with the lines Extract should write for them, which follow the pack's
 	// About and Card in Extract's prefix. Translate doesn't read them.
 	ExtractExamples []ExtractExample
@@ -76,6 +80,9 @@ func (p *Pack) Validate(v *ns.Vocabulary) error {
 		if err != nil {
 			return fmt.Errorf("nl: the pack's example %d (%q): %w", i+1, e.Question, err)
 		}
+	}
+	if err := p.prompts().checkTemplates(); err != nil {
+		return err
 	}
 	if err := validateCallables(p.Callables, v); err != nil {
 		return err

@@ -40,6 +40,15 @@ type Pack struct {
 	// Instructions, when set, replaces the instructions Instructions writes, word for word, so a host
 	// can try wordings against its agent (panyam/declaire#308) without changing code.
 	Instructions string
+	// ToolDescriptions, when set, replace tools' descriptions by tool name (query, schema, explain,
+	// ask, look, values, find, cypher), word for word (#485); ToolDescriptions(p) gives jaala's, as
+	// they'd be written for this pack. ArgDescriptions replace the docs of a tool's own arguments, by
+	// tool and argument name. New refuses a name that isn't a tool's or one of its arguments, so a
+	// typo fails at startup rather than leaving jaala's text in place.
+	ToolDescriptions map[string]string
+	ArgDescriptions  map[string]map[string]string
+	// AgentLine, when set, replaces AgentLine's sentence word for word (#485).
+	AgentLine string
 	// Format, when set, writes a query's or an ask's answer instead of the default table, such as with
 	// a host's own links or code snippets for what the rows cite.
 	Format func(Answer) string
@@ -207,14 +216,27 @@ func NewWith[A any](v *ns.Vocabulary, p Pack, o Options, x Extension[A]) (*serve
 		return nil, fmt.Errorf("mcp: the host's arguments: %w", err)
 	}
 	t := &tools{vocab: vocab, p: p, o: o}
-	topic := topic(p.About)
-	query, qerr := tool(t, x, host, "query", fmt.Sprintf(queryDesc, topic), (*call).query)
-	schema, serr := tool(t, x, host, "schema", fmt.Sprintf(schemaDesc, topic), (*call).schema)
-	explain, eerr := tool(t, x, host, "explain", explainDesc, (*call).explain)
-	ask, aerr := tool(t, x, host, "ask", fmt.Sprintf(askDesc, topic), (*call).ask)
-	look, lerr := tool(t, x, host, "look", fmt.Sprintf(lookDesc, topic), (*call).look)
-	values, verr := tool(t, x, host, "values", fmt.Sprintf(valuesDesc, topic), (*call).values)
-	find, ferr := tool(t, x, host, "find", fmt.Sprintf(findDesc, topic), (*call).find)
+	desc := ToolDescriptions(p)
+	for name := range p.ToolDescriptions {
+		if _, ok := desc[name]; !ok {
+			return nil, fmt.Errorf("mcp: the pack describes a tool %q, which the server doesn't offer", name)
+		}
+	}
+	for name := range p.ArgDescriptions {
+		if _, ok := desc[name]; !ok {
+			return nil, fmt.Errorf("mcp: the pack describes arguments of a tool %q, which the server doesn't offer", name)
+		}
+	}
+	for name, d := range p.ToolDescriptions {
+		desc[name] = d
+	}
+	query, qerr := tool(t, x, host, "query", desc["query"], (*call).query)
+	schema, serr := tool(t, x, host, "schema", desc["schema"], (*call).schema)
+	explain, eerr := tool(t, x, host, "explain", desc["explain"], (*call).explain)
+	ask, aerr := tool(t, x, host, "ask", desc["ask"], (*call).ask)
+	look, lerr := tool(t, x, host, "look", desc["look"], (*call).look)
+	values, verr := tool(t, x, host, "values", desc["values"], (*call).values)
+	find, ferr := tool(t, x, host, "find", desc["find"], (*call).find)
 	if err := errors.Join(qerr, serr, eerr, aerr, lerr, verr, ferr); err != nil {
 		return nil, err
 	}
@@ -227,7 +249,7 @@ func NewWith[A any](v *ns.Vocabulary, p Pack, o Options, x Extension[A]) (*serve
 		srv.Register(ask)
 	}
 	if p.Cypher != nil {
-		cy, err := tool(t, x, host, "cypher", fmt.Sprintf(cypherDesc, topic, p.Cypher.Describe()), (*call).cypher)
+		cy, err := tool(t, x, host, "cypher", desc["cypher"], (*call).cypher)
 		if err != nil {
 			return nil, err
 		}
@@ -336,10 +358,33 @@ func instructions(p Pack, ask bool) string {
 	return b.String() + "\n"
 }
 
+// ToolDescriptions are jaala's descriptions of the server's tools as New writes them for p, by tool
+// name, from its About (and its graph, for cypher, offered only with one), whatever p's own
+// ToolDescriptions say: the text a host starts from to write its own.
+func ToolDescriptions(p Pack) map[string]string {
+	topic := topic(p.About)
+	d := map[string]string{
+		"query":   fmt.Sprintf(queryDesc, topic),
+		"schema":  fmt.Sprintf(schemaDesc, topic),
+		"explain": explainDesc,
+		"ask":     fmt.Sprintf(askDesc, topic),
+		"look":    fmt.Sprintf(lookDesc, topic),
+		"values":  fmt.Sprintf(valuesDesc, topic),
+		"find":    fmt.Sprintf(findDesc, topic),
+	}
+	if p.Cypher != nil {
+		d["cypher"] = fmt.Sprintf(cypherDesc, topic, p.Cypher.Describe())
+	}
+	return d
+}
+
 // AgentLine is the line a host adds to its agent's instructions (a CLAUDE.md, say) so the agent
 // reaches for the server: an agent with its own tools called Declaire's on 1 of 42 questions until it
 // was told in one sentence what it is for (panyam/declaire#288).
 func AgentLine(p Pack) string {
+	if p.AgentLine != "" {
+		return p.AgentLine
+	}
 	name := p.Name
 	if name == "" {
 		name = "jaala"

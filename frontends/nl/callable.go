@@ -51,7 +51,7 @@ func validateCallables(cs []Callable, v *ns.Vocabulary) error {
 // call of variables named for its arguments, with its doc and a line per argument.
 func pickPrefix(cs []Callable, v *ns.Vocabulary, p *Pack) (string, error) {
 	var b strings.Builder
-	b.WriteString(pickInstructions)
+	b.WriteString(p.prompts().Pick)
 	about := *p
 	about.Examples = nil
 	b.WriteString(about.Prefix())
@@ -192,7 +192,7 @@ func pickCall(ctx context.Context, ask string, v *ns.Vocabulary, model Model, o 
 		}
 		refused[try.Text] = err
 		why := strings.TrimRight(try.explain(err), "\n")
-		turns = append(turns, Turn{RoleModel, try.Text}, Turn{RoleUser, why + "\n\nCall another relation, or this one with other values, or reply none."})
+		turns = append(turns, Turn{RoleModel, try.Text}, Turn{RoleUser, why + "\n\n" + o.Pack.prompts().PickRetry})
 	}
 	return Program{}, Prompt{}, false, nil
 }

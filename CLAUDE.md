@@ -141,6 +141,10 @@ GOARCH=wasm go test ./ns` (#417 ran `ns` that way).
   Step, a pick a `Try` with `Mode` `call`, and anything else falls through to drafting. A pick is
   jaala's text under any FrontEnd, voted on with its own prompt and escalated past like a draft.
   `TestEvalCallable` is the pick arm (`testdata/eval_call.golden`), `TestEval` the drafting arm.
+  Every piece of text jaala writes into a prompt is a `Prompts` field (`prompts.go`, #485) a pack
+  replaces word for word, read through `Pack.prompts()` (nil-safe, field by field over
+  `DefaultPrompts`); a new piece of prompt text goes there too, with a test in `prompts_test.go`. Its
+  templates (`templates()`) are checked by `Pack.Validate` and up front in `translate`.
 - **`nl.Grammar()` is GBNF built from a rule table** (`frontends/nl/grammar.go`, #323), and every text it
   accepts must parse: `TestEveryProgramTheGrammarWritesParses` samples 21,000 programs from the table
   over 70 seeds and every depth (one seed alone missed `-(9)` as a column). The other direction lives
@@ -193,7 +197,8 @@ GOARCH=wasm go test ./ns` (#417 ran `ns` that way).
   instructions are written from the pack (`mcp.Instructions`, sent with mcpkit's `WithInstructions`,
   which mcpkit v0.8.2 put on the initialize result where clients read it: before, Claude Code saw
   none) unless `Pack.Instructions` replaces them word for word, which declaire#308's wording runs
-  use. `Options.Abstain` (#482) answers an abstained `ask` as an ordinary result, not a tool error. `Options.Server` (#474) are a host's own mcpkit options, applied after those, so the host's
+  use; `Pack.ToolDescriptions`, `ArgDescriptions` and `AgentLine` replace the rest of its text the same
+  way (#485), an unknown tool or argument name failing `New`. `Options.Abstain` (#482) answers an abstained `ask` as an ordinary result, not a tool error. `Options.Server` (#474) are a host's own mcpkit options, applied after those, so the host's
   wins, a `WithInstructions` included (agni's `WithListTTLMs`; unset, mcpkit sends `ttlMs: 0`, not nothing). A host adds its own tools on the returned server and writes answers with `Pack.Format`, and
   `Pack.Data` (#469) as structured content, which must be a JSON object and replaces the `json` shape.
   `query` and `explain` take `bind` (`bind.values`, then `option` into `datalog.Bind`; a list ranges a

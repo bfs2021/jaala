@@ -19,6 +19,8 @@ type memory struct {
 	seen  map[string][]string // a value's spelling key to the values with that key
 	facts []string
 	last  string // the last refusal, whole, with what to do about it
+
+	found, refused string // Prompts.CompactFound and CompactRefused, heading the compact turn's lists
 }
 
 // see records values the data was seen to hold.
@@ -121,10 +123,10 @@ func (m *memory) compact(ask string) []Turn {
 	var b strings.Builder
 	b.WriteString(ask)
 	if len(m.facts) > 0 {
-		b.WriteString("\n\nWhat you have found so far:\n" + strings.Join(m.facts, "\n"))
+		b.WriteString("\n\n" + m.found + "\n" + strings.Join(m.facts, "\n"))
 	}
 	if m.last != "" {
-		b.WriteString("\n\nYour last answer was refused:\n" + m.last)
+		b.WriteString("\n\n" + m.refused + "\n" + m.last)
 	}
 	return []Turn{{RoleUser, b.String()}}
 }
