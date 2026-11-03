@@ -37,11 +37,9 @@ type Role struct {
 	Provider agent.Provider
 	// Label names the model in the Trace and Program.Model; "model" or "fallback" when empty.
 	Label string
-	// Temperature replaces the role's default (ModelTemperature, FallbackTemperature).
+	// Temperature replaces the role's default (ModelTemperature, FallbackTemperature). It is sent only
+	// to a provider whose agent.CapabilitiesOf says it takes one, so an Anthropic role needs no setting.
 	Temperature *float64
-	// NoTemperature sends none, for a provider that answers 400 to any (current Anthropic models).
-	// chakra can't say which providers refuse one yet (panyam/chakra#191), so the host says it here.
-	NoTemperature bool
 	// MaxTokens replaces the role's default (MaxTokens, or ThinkingMaxTokens when Thinking).
 	MaxTokens int
 	// Thinking is for a reasoning model: no grammar, which would hold the reply to a program from its
@@ -120,8 +118,6 @@ func (r Role) build(label string, temp float64) nl.Model {
 	}
 	m := chakra.New(label, r.Provider)
 	switch {
-	case r.NoTemperature:
-		m.Temperature = nil
 	case r.Temperature != nil:
 		t := *r.Temperature
 		m.Temperature = &t

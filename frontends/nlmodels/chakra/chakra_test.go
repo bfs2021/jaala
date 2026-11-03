@@ -42,6 +42,7 @@ var prompt = nl.Prompt{
 func TestCompleteSendsThePromptAsOneCall(t *testing.T) {
 	r := &recorder{res: agent.ProviderResponse{Text: "edge(?a, ?b) => ?a",
 		Usage: &agent.Usage{InputTokens: 120, OutputTokens: 9, CachedInputTokens: 100}}}
+	r.caps.Temperature = true
 	m := New("qwen", r)
 	out, err := m.Complete(context.Background(), prompt)
 	if err != nil {
@@ -74,13 +75,14 @@ func TestCompleteSendsWhatTheProviderCanSend(t *testing.T) {
 	plain := prompt
 	plain.Grammar = ""
 	for _, c := range []struct {
-		name          string
-		caps          agent.Capabilities
-		grammar, seed bool
+		name                string
+		caps                agent.Capabilities
+		grammar, seed, temp bool
 	}{
-		{"llama.cpp", agent.Capabilities{Guided: []string{agent.GuidedGrammar, agent.GuidedJSONSchema}, Seed: true}, true, true},
-		{"ollama", agent.Capabilities{Guided: []string{agent.GuidedJSONSchema}, Seed: true}, false, true},
-		{"anthropic", agent.Capabilities{}, false, false},
+		{"llama.cpp", agent.Capabilities{Guided: []string{agent.GuidedGrammar, agent.GuidedJSONSchema}, Seed: true, Temperature: true}, true, true, true},
+		{"ollama", agent.Capabilities{Guided: []string{agent.GuidedJSONSchema}, Seed: true, Temperature: true}, false, true, true},
+		{"anthropic", agent.Capabilities{}, false, false, false},
+		{"openai NoTemperature", agent.Capabilities{Seed: true}, false, true, false},
 	} {
 		r := &recorder{res: agent.ProviderResponse{Text: "x"}, caps: c.caps}
 		m := New(c.name, r)
@@ -98,6 +100,9 @@ func TestCompleteSendsWhatTheProviderCanSend(t *testing.T) {
 		}
 		if sent := second.Seed != nil && *second.Seed == 1; sent != c.seed || (second.Seed != nil && !sent) {
 			t.Errorf("%s: a vote's second draft was sent seed %v, want sent %v", c.name, second.Seed, c.seed)
+		}
+		if sent := first.Temperature != nil && *first.Temperature == 0; sent != c.temp || (first.Temperature != nil && !sent) {
+			t.Errorf("%s: temperature %v, want sent %v", c.name, first.Temperature, c.temp)
 		}
 		if third.Guided != nil {
 			t.Errorf("%s: a prompt with no grammar was sent %+v", c.name, third.Guided)

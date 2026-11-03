@@ -36,7 +36,7 @@ func (r *recorder) Stream(context.Context, agent.ProviderRequest) (agent.Stream,
 func (r *recorder) ProviderCapabilities() agent.Capabilities { return r.caps }
 
 // llamaCaps is what chakra's llama.cpp preset reports.
-var llamaCaps = agent.Capabilities{Guided: []string{agent.GuidedGrammar, agent.GuidedJSONSchema}, Seed: true}
+var llamaCaps = agent.Capabilities{Guided: []string{agent.GuidedGrammar, agent.GuidedJSONSchema}, Seed: true, Temperature: true}
 
 func replying(replies ...string) *recorder { return &recorder{replies: replies, caps: llamaCaps} }
 
@@ -92,15 +92,17 @@ func TestAskTunesEachRole(t *testing.T) {
 	}
 }
 
-// A Role's own temperature, token limit and label replace the defaults, and NoTemperature sends none.
+// A Role's own temperature, token limit and label replace the defaults, and a provider that takes no
+// temperature (Anthropic's) is sent none.
 // control: without a Fallback provider there is no fallback.
 func TestARoleOverridesTheDefaults(t *testing.T) {
 	v, _ := graph(t)
 	warm := 0.3
 	model, fallback := replying(`nope(?x) => ?x`), replying(`edge("a", ?x) => ?x`)
+	fallback.caps = agent.Capabilities{} // what chakra's Anthropic provider reports
 	tr, err := New(v, nil, Config{
 		Model:    Role{Provider: model, Label: "qwen", Temperature: &warm, MaxTokens: 99},
-		Fallback: Role{Provider: fallback, Label: "claude", NoTemperature: true},
+		Fallback: Role{Provider: fallback, Label: "claude"},
 	})
 	if err != nil {
 		t.Fatal(err)

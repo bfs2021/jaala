@@ -109,7 +109,7 @@ Most hosts want the tuning that goes with a model as well as the model, so `nlmo
 ```go
 t, err := translator.New(v, pack, translator.Config{
 	Model:    translator.Role{Provider: local},
-	Fallback: translator.Role{Provider: frontier, NoTemperature: true}, // Anthropic refuses a temperature
+	Fallback: translator.Role{Provider: frontier}, // sent no temperature: Anthropic's provider says it takes none
 	Base:     base,
 	Vote:     &nl.Vote{Drafts: 3},
 })

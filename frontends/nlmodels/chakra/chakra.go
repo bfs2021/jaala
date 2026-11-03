@@ -23,9 +23,11 @@ type Model struct {
 	Label string
 	// MaxTokens caps a reply's length, 512 when New made the Model; 0 leaves it to the provider.
 	MaxTokens int
-	// Temperature is sent when set, 0 when New made the Model, so drafts repeat and a vote's
-	// differ only by their seed. Set it to nil for a provider that refuses one (current Anthropic
-	// models answer 400): a llama-server sent none samples at 0.8.
+	// Temperature is sent when set and agent.CapabilitiesOf says the provider takes one, 0 when New
+	// made the Model, so drafts repeat and a vote's differ only by their seed. A provider reporting
+	// no temperature (Anthropic's, an OpenAI one configured NoTemperature, a host's own provider
+	// that reports nothing) gets none, since current Anthropic and OpenAI reasoning models answer
+	// 400 to any; a llama-server sent none samples at 0.8, which its preset's report avoids.
 	Temperature *float64
 }
 
@@ -39,11 +41,11 @@ func New(label string, p agent.Provider) *Model {
 func (m *Model) Name() string { return m.Label }
 
 // Complete sends p as one call: its Prefix as the instructions and its Turns as user and assistant
-// messages, with the grammar and the seed when the provider can send them. The tokens are the
+// messages, with the grammar, the seed and the temperature when the provider can send them. The tokens are the
 // provider's usage, cached ones included where the provider reports them. A refusal is chakra's
 // error, which carries the server's status and body (an unparseable grammar, say).
 func (m *Model) Complete(ctx context.Context, p nl.Prompt) (nl.Completion, error) {
-	req := agent.ProviderRequest{Instructions: p.Prefix, MaxTokens: m.MaxTokens, Temperature: m.Temperature}
+	req := agent.ProviderRequest{Instructions: p.Prefix, MaxTokens: m.MaxTokens}
 	for _, t := range p.Turns {
 		role := agent.RoleUser
 		if t.Role == nl.RoleModel {
@@ -52,6 +54,9 @@ func (m *Model) Complete(ctx context.Context, p nl.Prompt) (nl.Completion, error
 		req.Messages = append(req.Messages, agent.Message{Role: role, Text: t.Text})
 	}
 	caps := agent.CapabilitiesOf(m.Provider)
+	if caps.Temperature {
+		req.Temperature = m.Temperature
+	}
 	if g := (&agent.GuidedDecoding{Grammar: p.Grammar}); p.Grammar != "" && caps.CanGuide(g) {
 		req.Guided = g
 	}
