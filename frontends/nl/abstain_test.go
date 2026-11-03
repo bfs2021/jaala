@@ -79,8 +79,14 @@ func TestAbstainWhenNoDraftIsAccepted(t *testing.T) {
 			t.Errorf("%s: %v doesn't wrap the last try's error", c.name, err)
 		}
 	}
+	judged := o
+	judged.Pack = &nl.Pack{Check: func(context.Context, nl.Program) error { return errors.New("not a list of packages") }}
+	_, _, err := nl.Translate(context.Background(), mitQ, v, nil, model("small", broken, mit, `nada(?p) => ?p`), judged)
+	if a := abstained(t, err); a.Draft.Text != mit || !strings.Contains(a.Diagnosis, "not a list of packages") {
+		t.Errorf("one the pack's Check refused beats one that didn't check: %+v", a)
+	}
 	o.Abstain = &nl.Abstain{MinAgreement: 0.6, Budget: true}
-	_, _, err := nl.Translate(context.Background(), mitQ, v, nil, model("small", broken, empty, broken), o)
+	_, _, err = nl.Translate(context.Background(), mitQ, v, nil, model("small", broken, empty, broken), o)
 	var a *nl.Abstained
 	if err == nil || errors.As(err, &a) {
 		t.Errorf("control: without NoAnswer, %v", err)
