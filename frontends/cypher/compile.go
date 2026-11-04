@@ -1379,11 +1379,15 @@ func (c *compiler) value(e expr) (frag, *Error) {
 			case "last":
 				return frag{"list.at(", l, ", -1)"}, nil
 			}
+			switch ix := e.args[1].(type) {
+			case strLit, listLit:
+				return nil, errAt(ix.at(), "a list index is a number: l[0] is the first value, l[-1] the last")
+			}
 			i, err := c.value(e.args[1])
 			if err != nil {
 				return nil, err
 			}
-			return frag{"list.at(", l, ", ", i, ")"}, nil
+			return at(e.pos, frag{"list.at(", l, ", ", i, ")"}), nil
 		case "labels", "keys", "properties", "range", "tail":
 			return nil, gapLists.at(e.pos, "%s()", e.name)
 		}
