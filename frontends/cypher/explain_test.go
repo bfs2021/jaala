@@ -59,10 +59,10 @@ func TestACheckErrorIsLocatedInTheCypher(t *testing.T) {
 		{"the equality, not the first node of its label", "MATCH (p:Package)-[:IMPORTS]->(q:Package)\nWHERE q.tier = 'middle' RETURN p", "q.tier = 'middle'"},
 		{"text where a number goes", "MATCH (p:Package) WHERE p.loc = 'big' RETURN p.name", "p.loc = 'big'"},
 		{"a helper rule, at its relationship", "MATCH (a:Package)-[:LINKS*]->(b:Package) RETURN a, b", "-[:LINKS*]->"},
-		{"a relationship", "MATCH (a:Package)-[:LINKS]->(b:Package) RETURN a, b", "-[:LINKS]->"},
+		{"a list index a parameter gives as text", "UNWIND [1, 2][$i] AS n RETURN n", "[$i]"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
-			p, err := cypher.Compile(v, g, c.query)
+			p, err := cypher.Compile(v, g, c.query, cypher.Params(map[string]ns.Value{"i": ns.S("first")}))
 			if err != nil {
 				t.Fatal(err)
 			}

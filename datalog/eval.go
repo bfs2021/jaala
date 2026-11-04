@@ -471,6 +471,12 @@ func evaluateOn(b *Base, gen int64, q Query, o evalOptions, rewrite func(*Base, 
 	if err := checkFilters(b, q.Goal, nil); err != nil {
 		return nil, err
 	}
+	if err := validateSelect(sel, q.Having, q.Goal); err != nil {
+		return nil, err
+	}
+	if err := validateOrder(cols, written); err != nil {
+		return nil, err
+	}
 	if rewrite != nil {
 		q = rewrite(b, q)
 		if b.run != nil && b.run.readErr != nil {
@@ -501,12 +507,6 @@ func evaluateOn(b *Base, gen int64, q Query, o evalOptions, rewrite func(*Base, 
 	}
 	pos, negs := splitNegations(q.Goal.Literals)
 	if err := b.checkNegatedRelations(negs); err != nil {
-		return nil, err
-	}
-	if err := validateSelect(sel, q.Having, q.Goal); err != nil {
-		return nil, err
-	}
-	if err := validateOrder(cols, written); err != nil {
 		return nil, err
 	}
 

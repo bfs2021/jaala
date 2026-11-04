@@ -470,6 +470,8 @@ func TestMistakesSayWhatTheGraphHolds(t *testing.T) {
 		{`MATCH (a:Package) CALL str.split() YIELD part RETURN part`, "CALL str.split needs its string, separator as arguments", "CALL"},
 		{`MATCH (a:Package) RETURN COUNT { (a)-->(b) WHERE b.name = 'x' OR b.name = 'y' } AS n`, "COUNT { } over a WHERE with OR", "COUNT"},
 		{`MATCH (a:Package) WHERE a.license = 'say "hi"' RETURN a`, "double quote", "'say"},
+		{`UNWIND 0[''] AS a RETURN 0`, "a list index is a number", "''"},
+		{`MATCH (a:Package) RETURN [1, 2][[0]] AS n`, "a list index is a number", "[0]]"},
 	} {
 		_, err := cypher.Compile(v, depsGraph, c.cypher)
 		var ce *cypher.Error

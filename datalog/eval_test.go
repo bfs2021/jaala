@@ -486,6 +486,26 @@ func TestAnUnboundComparisonIsRefusedInAnUnreachedRule(t *testing.T) {
 	}
 }
 
+// A goal projecting a variable nothing binds is refused by every evaluator alike beside a rule that
+// errs while it runs (#506): Naive derived the rule and reported path.length's unbound path, while the
+// planned SemiNaive dropped it, as the goal never reaches it, and reported the projection. The check
+// now runs before any rule does, as Validate's does. control: reached, the rule errs in Naive.
+func TestAProjectedVariableNothingBindsIsRefusedBeforeAnyRuleRuns(t *testing.T) {
+	const rule = `r(?p) :- path.length(?p, 0), edge(?p, _); `
+	q := mustParse(t, rule+`edge(?a, _) => ?z`)
+	for _, ev := range []Evaluator{Naive{}, SemiNaive{WrittenOrder: true}, SemiNaive{}} {
+		if _, err := ev.Eval(bg, q, baseFor(std(graph()))); err == nil || !strings.Contains(err.Error(), "projected ?z is not bound") {
+			t.Errorf("%T%v: err = %v, want the unbound projection", ev, ev, err)
+		}
+	}
+	if err := Validate(q, std(graph())); err == nil || !strings.Contains(err.Error(), "projected ?z is not bound") {
+		t.Errorf("Validate: err = %v, want the unbound projection", err)
+	}
+	if _, err := (Naive{}).Eval(bg, mustParse(t, rule+`r(?p) => ?p`), baseFor(std(graph()))); err == nil || !strings.Contains(err.Error(), "path.length needs its path bound") {
+		t.Errorf("control: Naive reaching the rule: err = %v, want path.length's unbound path", err)
+	}
+}
+
 // So is a goal comparing a variable no positive literal of the goal binds, whether or not a binding
 // ever reaches it: over an empty relation Naive answered nothing, while the planned SemiNaive copied
 // the comparison into a demand rule and refused it (#89). As a projected variable is, it is refused
