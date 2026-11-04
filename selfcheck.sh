@@ -153,7 +153,7 @@ if command -v llama-server >/dev/null 2>&1 && [ -f "$model" ]; then
 		sleep 0.5
 	done
 	if [ $up = yes ]; then
-		(cd frontends/nlmodels && JAALA_LLAMACPP_URL="http://127.0.0.1:$port" go test -count=1 ./chakra ./translator -run '^TestARealServer' -v) >"$out" 2>&1 || status=1
+		(cd frontends/nlmodels && JAALA_LLAMACPP_URL="http://127.0.0.1:$port" go test -count=1 ./translator -run '^TestARealServer' -v) >"$out" 2>&1 || status=1
 		grep -E 'finished on their own|all inside the grammar|leaves the grammar|isn.t a program|refused|control:|^(--- |ok|FAIL)' "$out"
 	else
 		status=1

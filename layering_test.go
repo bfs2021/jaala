@@ -29,7 +29,6 @@ func TestLayering(t *testing.T) {
 		"datalog":                               {"ns"},
 		"frontends/nl":                          {"ns", "datalog", "internal/gbnf"},
 		"frontends/cypher":                      {"ns", "datalog", "internal/gbnf", "frontends/nl"},
-		"frontends/nlmodels/chakra":             {"frontends/nl"},
 		"frontends/nlmodels/translator":         {"ns", "datalog", "frontends/nl"},
 		"frontends/nlmodels/internal/modeltest": {"ns", "frontends/nl", "frontends/nlmodels/translator"},
 		"internal/gbnf":                         {},

@@ -185,3 +185,15 @@ func TestDefaultPromptsAreWhatJaalaSends(t *testing.T) {
 		t.Error(msg)
 	}
 }
+
+// Extract's instructions and its retry line are a pack's too.
+func TestAPacksPromptsReplaceExtractsText(t *testing.T) {
+	v, b := owned(t)
+	m := model("m", `+ imports("app", "api")`, `+ imports("app", "api") from "app imports api"`)
+	if _, _, err := extract(context.Background(), "app imports api.", v, m, nl.ExtractOptions{Base: b, Pack: with(ownedPack(), hostPrompts())}); err != nil {
+		t.Fatal(err)
+	}
+	if msg := want(m.asked[0].Prefix, "\nH-EXTRACT\n") + absent(m.asked[0].Prefix, "# Write the facts the text states") + want(m.asked[1].Turns[2].Text, "\n\nH-EXTRACTFIX"); msg != "" {
+		t.Error(msg)
+	}
+}

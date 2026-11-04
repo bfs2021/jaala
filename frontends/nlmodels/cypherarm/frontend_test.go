@@ -15,7 +15,7 @@ import (
 // replies answers in turn, recording what it was asked.
 type replies struct {
 	texts   []string
-	asked   []nl.Prompt
+	asked   []modeltest.Prompt
 	offered [][]string
 	descs   map[string]string
 }
@@ -27,9 +27,9 @@ func (r *replies) Offer(names []string, descs map[string]string) {
 
 func (r *replies) Name() string { return "small" }
 
-func (r *replies) Complete(_ context.Context, p nl.Prompt) (nl.Completion, error) {
+func (r *replies) Complete(_ context.Context, p modeltest.Prompt) (modeltest.Completion, error) {
 	r.asked = append(r.asked, p)
-	return nl.Completion{Text: r.texts[min(len(r.asked)-1, len(r.texts)-1)]}, nil
+	return modeltest.Completion{Text: r.texts[min(len(r.asked)-1, len(r.texts)-1)]}, nil
 }
 
 // A draft using Cypher a program can't express yet is refused as a gap and goes back in Cypher's terms,
@@ -122,16 +122,16 @@ func (*looker) Name() string { return "small" }
 
 func (m *looker) Offer(names []string, _ map[string]string) { m.offered = append(m.offered, names) }
 
-func (m *looker) Complete(_ context.Context, p nl.Prompt) (nl.Completion, error) {
+func (m *looker) Complete(_ context.Context, p modeltest.Prompt) (modeltest.Completion, error) {
 	for _, t := range p.Turns[1:] {
 		if t.Role == nl.RoleUser && strings.Contains(t.Text, `"MIT"`) {
-			return nl.Completion{Text: m.right}, nil
+			return modeltest.Completion{Text: m.right}, nil
 		}
 	}
 	if n := len(m.offered); n > 0 && slices.Contains(m.offered[n-1], nl.ActionValues) && len(p.Turns) == 1 {
-		return nl.Completion{Text: m.ask}, nil
+		return modeltest.Completion{Text: m.ask}, nil
 	}
-	return nl.Completion{Text: m.wrong}, nil
+	return modeltest.Completion{Text: m.wrong}, nil
 }
 
 // The actions are the same in Cypher (#393): values names a label's property and runs as a Cypher

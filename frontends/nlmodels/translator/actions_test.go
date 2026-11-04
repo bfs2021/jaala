@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/panyam/jaala/frontends/nlmodels/internal/modeltest"
+
 	"github.com/panyam/jaala/frontends/nl"
 	"github.com/panyam/jaala/internal/guide"
 )
@@ -14,7 +16,7 @@ import (
 // guesses the license's spelling. It asks for the values first when it is offered them as a tool.
 type looker struct {
 	ask, right, wrong string
-	asked             []nl.Prompt
+	asked             []modeltest.Prompt
 	offered           [][]string
 }
 
@@ -109,15 +111,15 @@ func TestStepsRunOut(t *testing.T) {
 	}
 }
 
-func (m *looker) Complete(_ context.Context, p nl.Prompt) (nl.Completion, error) {
+func (m *looker) Complete(_ context.Context, p modeltest.Prompt) (modeltest.Completion, error) {
 	m.asked = append(m.asked, p)
 	for _, t := range p.Turns[1:] {
 		if t.Role == nl.RoleUser && strings.Contains(t.Text, `"MIT"`) {
-			return nl.Completion{Text: m.right, TokensIn: 10, TokensOut: 5}, nil
+			return modeltest.Completion{Text: m.right, TokensIn: 10, TokensOut: 5}, nil
 		}
 	}
 	if n := len(m.offered); n > 0 && slices.Contains(m.offered[n-1], nl.ActionValues) && len(p.Turns) == 1 {
-		return nl.Completion{Text: m.ask, TokensIn: 10, TokensOut: 3}, nil
+		return modeltest.Completion{Text: m.ask, TokensIn: 10, TokensOut: 3}, nil
 	}
-	return nl.Completion{Text: m.wrong, TokensIn: 10, TokensOut: 5}, nil
+	return modeltest.Completion{Text: m.wrong, TokensIn: 10, TokensOut: 5}, nil
 }
