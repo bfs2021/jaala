@@ -111,7 +111,7 @@ func (p *Pack) Validate(v *ns.Vocabulary) error {
 	return nil
 }
 
-// Prefix is the pack's part of a Prompt's Prefix, which the translator puts after the card and its
+// Prefix is the pack's part of a session's Prefix, which the translator puts after the card and its
 // instructions: About as comment lines, Card as written, then the examples, each question as a
 // comment over its program. The same pack always gives the same text, so the prefix stays cacheable.
 func (p *Pack) Prefix() string {

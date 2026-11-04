@@ -17,7 +17,7 @@ import (
 
 // The tests in this package are nl.Translate's, moved here when the translator's loop moved onto
 // chakra Runners and nl.Translate went (#496). They drive a Translator through translate, which takes
-// what nl.Translate took, with the fallback as its last argument. Their models are still nl.Models
+// what nl.Translate took, with the fallback as its last argument. Their models are still modeltest.Models
 // that record what they were asked as nl.Prompts, run as chakra Providers by modeltest, so a test
 // reads what a model was asked as it did before.
 
@@ -28,7 +28,7 @@ var update = flag.Bool("update", false, "rewrite the golden files in testdata")
 type scripted struct {
 	name    string
 	replies []string
-	asked   []nl.Prompt
+	asked   []modeltest.Prompt
 	offered [][]string        // the tools each request offered, as asked
 	descs   map[string]string // the tools' descriptions, as last offered
 }
@@ -40,16 +40,16 @@ func (s *scripted) Offer(names []string, descs map[string]string) {
 
 func (s *scripted) Name() string { return s.name }
 
-func (s *scripted) Complete(_ context.Context, p nl.Prompt) (nl.Completion, error) {
+func (s *scripted) Complete(_ context.Context, p modeltest.Prompt) (modeltest.Completion, error) {
 	s.asked = append(s.asked, p)
 	if len(s.asked) > len(s.replies) {
-		return nl.Completion{}, errors.New("out of replies")
+		return modeltest.Completion{}, errors.New("out of replies")
 	}
 	r := s.replies[len(s.asked)-1]
 	if r == "!fail" {
-		return nl.Completion{}, errors.New("server down")
+		return modeltest.Completion{}, errors.New("server down")
 	}
-	return nl.Completion{Text: r, TokensIn: 100 * len(s.asked), TokensOut: len(r), TokensCached: 90}, nil
+	return modeltest.Completion{Text: r, TokensIn: 100 * len(s.asked), TokensOut: len(r), TokensCached: 90}, nil
 }
 
 func model(name string, replies ...string) *scripted { return &scripted{name: name, replies: replies} }
@@ -64,19 +64,19 @@ type byQuestion struct {
 
 func (m *byQuestion) Name() string { return m.name }
 
-func (m *byQuestion) Complete(_ context.Context, p nl.Prompt) (nl.Completion, error) {
+func (m *byQuestion) Complete(_ context.Context, p modeltest.Prompt) (modeltest.Completion, error) {
 	q, _, _ := strings.Cut(p.Turns[0].Text, "\n")
 	ds := m.drafts[q]
 	n := m.asked[q]
 	m.asked[q]++
 	if n >= len(ds) {
-		return nl.Completion{}, errors.New("no draft left")
+		return modeltest.Completion{}, errors.New("no draft left")
 	}
 	in := len(p.Prefix)
 	for _, t := range p.Turns {
 		in += len(t.Text)
 	}
-	return nl.Completion{Text: ds[n], TokensIn: in / 4, TokensCached: len(p.Prefix) / 4, TokensOut: len(ds[n]) / 4}, nil
+	return modeltest.Completion{Text: ds[n], TokensIn: in / 4, TokensCached: len(p.Prefix) / 4, TokensOut: len(ds[n]) / 4}, nil
 }
 
 func drafter(name string, drafts map[string][]string) *byQuestion {
@@ -210,6 +210,11 @@ func nlCases(cs []guide.Case) []nl.Case {
 var evalCases = nlCases(guide.Cases)
 
 // translate is what nl.Translate was, on a Translator (modeltest.Translate).
-func translate(ctx context.Context, q string, v *ns.Vocabulary, g nl.Grounder, m nl.Model, o nl.Options, fallback ...nl.Model) (nl.Program, nl.Trace, error) {
+func translate(ctx context.Context, q string, v *ns.Vocabulary, g nl.Grounder, m modeltest.Model, o nl.Options, fallback ...modeltest.Model) (nl.Program, nl.Trace, error) {
 	return modeltest.Translate(ctx, q, v, g, m, o, fallback...)
+}
+
+// extract is what nl.Extract was, on a Translator (modeltest.Extract).
+func extract(ctx context.Context, text string, v *ns.Vocabulary, m modeltest.Model, o nl.ExtractOptions, fallback ...modeltest.Model) (nl.Extraction, nl.Trace, error) {
+	return modeltest.Extract(ctx, text, v, m, o, fallback...)
 }

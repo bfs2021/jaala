@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"slices"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/panyam/jaala/datalog"
@@ -17,9 +16,9 @@ import (
 // agrees with nothing. Over Options.Base drafts agree when their rows match as a multiset, by value,
 // as Eval matches them; without a Base, when they compile to the same program.
 //
-// The drafts differ only if the model samples: each is asked with Prompt.Draw set, and a Model
-// decoding greedily (temperature 0) writes the same draft every time, so its vote agrees by
-// construction. nlmodels' chakra Model seeds by Draw, for a provider that takes a seed.
+// The drafts differ only if the model samples: the translator seeds each draw when the provider
+// takes a seed, and a model decoding greedily (temperature 0) writes the same draft every time, so
+// its vote agrees by construction.
 type Vote struct {
 	// Drafts is how many answers are drawn in all, the first included; 3 when 0.
 	Drafts int
@@ -84,31 +83,6 @@ type BudgetSpent struct {
 
 func (e *BudgetSpent) Error() string {
 	return fmt.Sprintf("nl: budget spent before an answer: %d tokens in %v (budget %d tokens, %v)", e.Tokens, e.Elapsed.Round(time.Millisecond), e.Budget.Tokens, e.Budget.Time)
-}
-
-// spending tracks Extract's spend against its Budget.
-type spending struct {
-	budget Budget
-	start  time.Time
-	mu     sync.Mutex
-	tokens int
-}
-
-// check is a BudgetSpent once the budget is spent, nil before.
-func (s *spending) check() error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	elapsed := time.Since(s.start)
-	if s.budget.Tokens > 0 && s.tokens >= s.budget.Tokens || s.budget.Time > 0 && elapsed >= s.budget.Time {
-		return &BudgetSpent{Budget: s.budget, Tokens: s.tokens, Elapsed: elapsed}
-	}
-	return nil
-}
-
-func (s *spending) add(in, out int) {
-	s.mu.Lock()
-	s.tokens += in + out
-	s.mu.Unlock()
 }
 
 // The classes a refused try, or a case that failed, falls in (Try.Class, Result.Class): what kind of

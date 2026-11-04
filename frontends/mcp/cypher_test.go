@@ -293,14 +293,14 @@ func TestACypherCheckErrorPointsIntoTheQuery(t *testing.T) {
 // prompted replies with one text, recording each prompt it was sent.
 type prompted struct {
 	reply string
-	asked []nl.Prompt
+	asked []testPrompt
 }
 
 func (m *prompted) Name() string { return "small" }
 
-func (m *prompted) Complete(_ context.Context, p nl.Prompt) (nl.Completion, error) {
+func (m *prompted) Complete(_ context.Context, p testPrompt) (testReply, error) {
 	m.asked = append(m.asked, p)
-	return nl.Completion{Text: m.reply}, nil
+	return testReply{Text: m.reply}, nil
 }
 
 // ask translates into Cypher when the call or the pack says so (#386): the model sees the graph and

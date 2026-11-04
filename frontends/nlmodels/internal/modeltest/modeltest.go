@@ -1,7 +1,7 @@
-// Package modeltest runs tests' scripted models on the translator's chakra Runners (#496). Its
-// models are nl.Models, which record what they were asked as nl.Prompts and reply in turn, as
-// nl.Translate's tests' did; Provider makes one a chakra Provider, and Translate asks a Translator over
-// them what nl.Translate was asked.
+// Package modeltest runs tests' scripted models on the translator's chakra Runners (#496, #502). A
+// Model records what it was asked as a Prompt and replies in turn, as nl.Translate's and nl.Extract's
+// tests' models did before nl stopped asking models itself; Provider makes one a chakra Provider, and
+// Translate and Extract ask a Translator over them what nl.Translate and nl.Extract were asked.
 package modeltest
 
 import (
@@ -18,18 +18,41 @@ import (
 	"github.com/panyam/jaala/ns"
 )
 
-// Provider is m as a chakra Provider.
-func Provider(m nl.Model) agent.Provider { return &provider{m: m} }
+// A Model writes text from a prompt: a test's scripted model, which nl.Model was until #502.
+type Model interface {
+	// Name says which model answered, for the Trace and Program.Model.
+	Name() string
+	Complete(ctx context.Context, p Prompt) (Completion, error)
+}
 
-// provider is an nl.Model as a chakra Provider, so the tests' models run on the Translator's
-// Runners: each request is the nl.Prompt it carries (prompt), the model's reply comes back with its
+// A Prompt is a request as a Model reads it: the Prefix (the instructions), the conversation so far,
+// the Draw a vote's seed stands for (from 1, 0 outside a vote), and the grammar sent, "" for none.
+type Prompt struct {
+	Prefix  string
+	Turns   []nl.Turn
+	Draw    int
+	Grammar string
+}
+
+// A Completion is a Model's reply and what it cost; TokensCached counts the prompt tokens a cache
+// answered.
+type Completion struct {
+	Text                              string
+	TokensIn, TokensOut, TokensCached int
+}
+
+// Provider is m as a chakra Provider.
+func Provider(m Model) agent.Provider { return &provider{m: m} }
+
+// provider is a Model as a chakra Provider, so the tests' models run on the Translator's
+// Runners: each request is the Prompt it carries (prompt), the model's reply comes back with its
 // tokens as usage, and a reply that is a text action (look NAME, values TARGET, find NAME, or try then
 // a draft) is a tool call when the request offers tools. A guided request offering no tools right
 // after a text answer to one that offered them is chakra's finalizing call: it gets the answer again
 // without asking the model. It reports llama.cpp's capabilities, so the grammar and a vote's seed
 // are sent.
 type provider struct {
-	m     nl.Model
+	m     Model
 	mu    sync.Mutex
 	final string // the answer a finalizing call repeats
 	calls int
@@ -45,10 +68,10 @@ type Offerer interface {
 	Offer(names []string, descs map[string]string)
 }
 
-// prompt is req as nl's Prompt: the instructions as the Prefix, each tool call as the text action
+// prompt is req as a Prompt: the instructions as the Prefix, each tool call as the text action
 // that asks for it, each tool result as the user's turn, a seed as the Draw it stands for.
-func prompt(req agent.ProviderRequest) nl.Prompt {
-	p := nl.Prompt{Prefix: req.Instructions}
+func prompt(req agent.ProviderRequest) Prompt {
+	p := Prompt{Prefix: req.Instructions}
 	if req.Guided != nil {
 		p.Grammar = req.Guided.Grammar
 	}
@@ -69,6 +92,8 @@ func prompt(req agent.ProviderRequest) nl.Prompt {
 			}
 		case m.Role == agent.RoleAssistant:
 			p.Turns = append(p.Turns, nl.Turn{Role: nl.RoleModel, Text: m.Text})
+		case m.Role == agent.RoleSystem:
+			p.Turns = append(p.Turns, nl.Turn{Role: nl.Role(agent.RoleSystem), Text: m.Text}) // a note jaala should have sent as the user's
 		default:
 			p.Turns = append(p.Turns, nl.Turn{Role: nl.RoleUser, Text: m.Text})
 		}
@@ -168,7 +193,7 @@ func TextAction(r string) (action, arg string, ok bool) {
 
 // Translate is what nl.Translate was, on a Translator: m is the model, fallback, when given, the
 // fallback, and g, when not nil, the Grounder. o is the options as given, its Pack the Translator's.
-func Translate(ctx context.Context, q string, v *ns.Vocabulary, g nl.Grounder, m nl.Model, o nl.Options, fallback ...nl.Model) (nl.Program, nl.Trace, error) {
+func Translate(ctx context.Context, q string, v *ns.Vocabulary, g nl.Grounder, m Model, o nl.Options, fallback ...Model) (nl.Program, nl.Trace, error) {
 	cfg := translator.Config{Model: translator.Role{Provider: Provider(m), Label: m.Name()}, Grounder: g, Options: func(p *nl.Options) { *p = o }}
 	if len(fallback) > 0 && fallback[0] != nil {
 		cfg.Fallback = translator.Role{Provider: Provider(fallback[0]), Label: fallback[0].Name()}
@@ -178,4 +203,17 @@ func Translate(ctx context.Context, q string, v *ns.Vocabulary, g nl.Grounder, m
 		return nl.Program{}, nl.Trace{}, err
 	}
 	return tr.Ask(ctx, q)
+}
+
+// Extract is what nl.Extract was, on a Translator: m is the model, fallback, when given, the fallback.
+func Extract(ctx context.Context, text string, v *ns.Vocabulary, m Model, o nl.ExtractOptions, fallback ...Model) (nl.Extraction, nl.Trace, error) {
+	cfg := translator.Config{Model: translator.Role{Provider: Provider(m), Label: m.Name()}}
+	if len(fallback) > 0 && fallback[0] != nil {
+		cfg.Fallback = translator.Role{Provider: Provider(fallback[0]), Label: fallback[0].Name()}
+	}
+	tr, err := translator.New(v, o.Pack, cfg)
+	if err != nil {
+		return nl.Extraction{}, nl.Trace{}, err
+	}
+	return tr.Extract(ctx, text, o)
 }

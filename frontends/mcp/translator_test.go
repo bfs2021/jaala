@@ -10,18 +10,38 @@ import (
 	"github.com/panyam/jaala/ns"
 )
 
+// testModel is a scripted model the tests' Translator asks: what nl.Model was until #502, when nl
+// stopped asking models. This module can't import nlmodels, which brings chakra.
+type testModel interface {
+	Name() string
+	Complete(ctx context.Context, p testPrompt) (testReply, error)
+}
+
+// testPrompt is what a testModel is asked: the session's prefix, the conversation and the grammar.
+type testPrompt struct {
+	Prefix  string
+	Turns   []nl.Turn
+	Grammar string
+}
+
+// testReply is a testModel's reply and what it cost.
+type testReply struct {
+	Text                string
+	TokensIn, TokensOut int
+}
+
 // sessions is a Translator for the ask tool's tests: an nl.Session judged turn by turn, its models
 // the tests' scripted ones, the fallback in a fresh conversation after the model. It has none of
 // nlmodels' translator's votes, tools or budget, which the ask tool doesn't set; this module can't
 // import nlmodels, which brings chakra.
 type sessions struct {
 	v               *ns.Vocabulary
-	model, fallback nl.Model
+	model, fallback testModel
 }
 
 // translating is a Translator over models: the model, then the fallback when one is given. The dial
 // helpers fill in the vocabulary they build (withVocabulary).
-func translating(models ...nl.Model) *sessions {
+func translating(models ...testModel) *sessions {
 	t := &sessions{model: models[0]}
 	if len(models) > 1 {
 		t.fallback = models[1]
@@ -49,7 +69,7 @@ func (t *sessions) translate(ctx context.Context, question string, o nl.Options,
 	if err != nil {
 		return nl.Program{}, tr, err
 	}
-	var models []nl.Model
+	var models []testModel
 	if model {
 		models = append(models, t.model)
 	}
@@ -62,7 +82,7 @@ func (t *sessions) translate(ctx context.Context, question string, o nl.Options,
 		turns := []nl.Turn{{Role: nl.RoleUser, Text: c.Ask()}}
 		for {
 			start := time.Now()
-			reply, err := m.Complete(ctx, nl.Prompt{Prefix: s.Prefix(), Turns: turns, Grammar: s.Grammar()})
+			reply, err := m.Complete(ctx, testPrompt{Prefix: s.Prefix(), Turns: turns, Grammar: s.Grammar()})
 			if err != nil {
 				tr.Tries = append(tr.Tries, nl.Try{Model: m.Name(), Err: err, Kind: nl.KindModel, Latency: time.Since(start)})
 				last = fmt.Errorf("model %s: %w", m.Name(), err)

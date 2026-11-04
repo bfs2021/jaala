@@ -9,6 +9,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/panyam/jaala/frontends/nlmodels/internal/modeltest"
+
 	"github.com/panyam/jaala/datalog"
 	"github.com/panyam/jaala/frontends/nl"
 	"github.com/panyam/jaala/internal/guide"
@@ -30,19 +32,19 @@ type byDraw struct {
 }
 
 func (m *byDraw) Name() string { return "drawn" }
-func (m *byDraw) Complete(_ context.Context, p nl.Prompt) (nl.Completion, error) {
+func (m *byDraw) Complete(_ context.Context, p modeltest.Prompt) (modeltest.Completion, error) {
 	if p.Draw > 0 {
 		m.arrived <- struct{}{}
 		deadline := time.After(time.Second)
 		for len(m.arrived) < cap(m.arrived) {
 			select {
 			case <-deadline:
-				return nl.Completion{}, errors.New("drawn alone")
+				return modeltest.Completion{}, errors.New("drawn alone")
 			case <-time.After(time.Millisecond):
 			}
 		}
 	}
-	return nl.Completion{Text: m.replies[p.Draw], TokensIn: 10, TokensOut: 5}, nil
+	return modeltest.Completion{Text: m.replies[p.Draw], TokensIn: 10, TokensOut: 5}, nil
 }
 
 // finder finds a fixed answer for every name, recording what it was asked.

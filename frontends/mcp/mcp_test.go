@@ -246,12 +246,12 @@ type scripted struct {
 
 func (s *scripted) Name() string { return s.name }
 
-func (s *scripted) Complete(context.Context, nl.Prompt) (nl.Completion, error) {
+func (s *scripted) Complete(context.Context, testPrompt) (testReply, error) {
 	s.asked++
 	if s.asked > len(s.replies) {
-		return nl.Completion{}, errors.New("out of replies")
+		return testReply{}, errors.New("out of replies")
 	}
-	return nl.Completion{Text: s.replies[s.asked-1], TokensIn: 10, TokensOut: 5}, nil
+	return testReply{Text: s.replies[s.asked-1], TokensIn: 10, TokensOut: 5}, nil
 }
 
 // ask translates through the pack, whose Check refuses an answer the model then fixes, and mode picks

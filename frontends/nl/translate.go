@@ -11,36 +11,7 @@ import (
 	"github.com/panyam/jaala/ns"
 )
 
-// A Model writes text from a prompt (#325), for Extract, which asks one once per try. nl runs no
-// model: a host wraps whichever it uses, a local one through nlmodels' chakra package (#330) or a
-// hosted one through its SDK. The translator asks chakra Providers instead (nlmodels/translator,
-// #496). Complete must honour ctx's cancellation. An error fails that try and moves on to the
-// fallback model, since retrying the same call rarely helps.
-type Model interface {
-	// Name says which model answered, for the Trace and Program.Model.
-	Name() string
-	Complete(ctx context.Context, p Prompt) (Completion, error)
-}
-
-// A Prompt is what a Model is asked: a Prefix that is the same for every question over one vocabulary,
-// so a client can send it as a cached prefix or system prompt, then the conversation so far.
-type Prompt struct {
-	Prefix string
-	// Turns start with the question (and any grounded names), then alternate the model's drafts and
-	// what was wrong with each.
-	Turns []Turn
-	// Draw is which of a Vote's extra drafts this prompt asks for, from 1, and 0 for every other
-	// prompt. A Model that samples should vary its seed by it: asked the same prompt alike, a greedy
-	// decoder writes the same draft, and the vote agrees by construction.
-	Draw int
-	// Grammar is GBNF holding the reply to a program over the vocabulary (GrammarFor, #324), for a
-	// Model whose decoder takes one, as nlmodels' llama.cpp client does. A Model that can't use it
-	// ignores it: every draft is checked anyway, so the grammar only saves tries. "" when
-	// Options.NoGrammar is set.
-	Grammar string
-}
-
-// A Turn is one message of a Prompt's conversation.
+// A Turn is one message of a conversation, as Conversation.Compact writes one.
 type Turn struct {
 	Role Role
 	Text string
@@ -54,13 +25,6 @@ const (
 	RoleUser  Role = "user"  // the question, or what was wrong with the last draft
 	RoleModel Role = "model" // a draft the model wrote
 )
-
-// A Completion is a Model's reply and what it cost. TokensCached counts the prompt tokens the model's
-// server answered from its cache, 0 when it doesn't say.
-type Completion struct {
-	Text                              string
-	TokensIn, TokensOut, TokensCached int
-}
 
 // A Grounder finds the values a question's names stand for (#325), the way Declaire's name.find turns
 // a short name into ranked ids, so a model is handed real values instead of spelling them. It is the
@@ -85,7 +49,7 @@ type Options struct {
 	Base *datalog.Base
 	// Eval are the options Base is evaluated with, such as a Budget.
 	Eval []datalog.Option
-	// Grammar replaces the grammar every Prompt carries, GrammarFor(v) by default, such as with
+	// Grammar replaces the grammar every answer is held to, GrammarFor(v) by default, such as with
 	// GrammarFor(v, GoalOnly()) for a small model. NoGrammar sends none.
 	Grammar   string
 	NoGrammar bool
@@ -189,7 +153,7 @@ const (
 	KindAnswer = "answer"
 )
 
-// instructions follow the card in every Prompt's Prefix.
+// instructions follow the card in every Session's Prefix.
 const instructions = `
 # Write one program answering the question, using only the members above: rules, if any, then
 # body => columns. Variables are ?name, strings are "quoted". Reply with the program alone.

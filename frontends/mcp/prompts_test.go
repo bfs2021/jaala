@@ -14,10 +14,10 @@ import (
 // heard is a scripted model keeping each prompt it is sent.
 type heard struct {
 	scripted
-	prompts []nl.Prompt
+	prompts []testPrompt
 }
 
-func (h *heard) Complete(ctx context.Context, p nl.Prompt) (nl.Completion, error) {
+func (h *heard) Complete(ctx context.Context, p testPrompt) (testReply, error) {
 	h.prompts = append(h.prompts, p)
 	return h.scripted.Complete(ctx, p)
 }

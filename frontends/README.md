@@ -9,8 +9,9 @@ inside its directory.
   card, a grammar per vocabulary for constrained decoding, errors a model can fix from, the
   translate loop, a host's domain pack (`nl.Pack`, `nl.DataCard`) and the eval that scores it. It
   imports `ns` and `datalog`.
-- `nlmodels/` (#330) is an `nl.Model` over any chakra `Provider` (#487): llama.cpp's
-  `llama-server` and Ollama through chakra's presets, hosted models through chakra's own providers.
+- `nlmodels/` (#330) is the translator (#490): `nl`'s sessions on chakra Runners (#496, #502), asking
+  any chakra `Provider` (#487), llama.cpp's `llama-server` and Ollama through chakra's presets and
+  hosted models through chakra's own providers, for a program (`Ask`) or a text's facts (`Extract`).
   It sends the grammar to a provider that can take one. It imports `nl`.
 - `mcp/` (#347) is an MCP server for any vocabulary, on mcpkit: `query`, `schema`, `explain` and,
   with a model, `ask`, its instructions written from a host's `nl.Pack`, and a host's own arguments

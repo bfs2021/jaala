@@ -21,7 +21,7 @@ type FrontEnd interface {
 	// Examples are questions with drafts answering them, in the language, which the translator shows the
 	// model in place of the pack's (jaala) examples and compiles and checks before asking it.
 	Examples() []Example
-	// Grammar is a GBNF grammar a decoder can hold the model to, sent as Prompt.Grammar; "" for none.
+	// Grammar is a GBNF grammar a decoder can hold the model to, sent with each answer; "" for none.
 	Grammar(v *ns.Vocabulary) (string, error)
 	// Compile reads a draft and writes the jaala program answering it. Its Compiled is set even when it
 	// fails, so its Explain writes the refusal.

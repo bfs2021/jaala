@@ -17,9 +17,9 @@ import (
 )
 
 // script answers each question with its own replies in turn, as a model making the same mistakes
-// every run would, keyed by the first line of the conversation's first message. It was an nl.Model
-// for nl.Translate and an agent.Provider for the Runner loop, so #500 could hold the two loops to one
-// script before nl.Translate went (#496); the arms below still check the loop reaches each path. A reply that is a text action (look NAME, values TARGET, find NAME, try and a draft)
+// every run would, keyed by the first line of the conversation's first message. #500 held the Runner
+// loop to nl.Translate with it before nl.Translate went (#496); the arms below still check the loop
+// reaches each path. A reply that is a text action (look NAME, values TARGET, find NAME, try and a draft)
 // is a tool call when the request offers tools, and text otherwise. A guided request offering no
 // tools right after a text answer to a request that offered them is chakra's finalizing call, and
 // gets that answer again.
@@ -31,17 +31,6 @@ type script struct {
 	final   map[string]string // the text answer a finalizing call repeats, per question
 	tooled  int               // requests that offered tools
 	longest int               // the most messages one request carried
-	asks    []string          // each request as the model read it: instructions, grammar, messages
-}
-
-// ask is a request as the model reads it, the same for nl's Prompt and chakra's ProviderRequest.
-func ask(instructions, grammar string, msgs [][2]string) string {
-	var b strings.Builder
-	fmt.Fprintf(&b, "instructions %q\ngrammar %d bytes %x\n", instructions, len(grammar), len(grammar))
-	for _, m := range msgs {
-		fmt.Fprintf(&b, "%s: %q\n", m[0], m[1])
-	}
-	return b.String()
 }
 
 func scripted(name string, replies map[string][]string) *script {
@@ -55,26 +44,6 @@ func (s *script) next(q string) (string, error) {
 		return rs[n], nil
 	}
 	return "", errors.New("no reply left")
-}
-
-// Name and Complete are the nl.Model.
-func (s *script) Name() string { return s.name }
-
-func (s *script) Complete(_ context.Context, p nl.Prompt) (nl.Completion, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	var msgs [][2]string
-	for _, t := range p.Turns {
-		role := "user"
-		if t.Role == nl.RoleModel {
-			role = "assistant"
-		}
-		msgs = append(msgs, [2]string{role, t.Text})
-	}
-	s.asks = append(s.asks, ask(p.Prefix, p.Grammar, msgs))
-	q, _, _ := strings.Cut(p.Turns[0].Text, "\n")
-	r, err := s.next(q)
-	return nl.Completion{Text: r}, err
 }
 
 // Generate, Stream and ProviderCapabilities are the agent.Provider, which reports llama.cpp's
@@ -104,15 +73,6 @@ func (s *script) turn(req agent.ProviderRequest) (agent.StubTurn, error) {
 		s.tooled++
 	}
 	s.longest = max(s.longest, len(req.Messages))
-	var msgs [][2]string
-	for _, m := range req.Messages {
-		msgs = append(msgs, [2]string{string(m.Role), m.Text})
-	}
-	grammar := ""
-	if req.Guided != nil {
-		grammar = req.Guided.Grammar
-	}
-	s.asks = append(s.asks, ask(req.Instructions, grammar, msgs))
 	q, _, _ := strings.Cut(req.Messages[0].Text, "\n")
 	if text, ok := s.final[q]; ok && req.Guided != nil && len(req.Tools) == 0 {
 		delete(s.final, q)

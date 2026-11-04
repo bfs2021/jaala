@@ -30,7 +30,7 @@ The same question comes up one level higher, between jaala and the hosts built o
 |---|---|
 | The engine: evaluation, planning, stores, budgets | The vocabulary, what its relations are and mean |
 | Change sets, versions, `At`, `Diff` and keyed updates | Identity, what makes two things one (a symbol id, a refdes) |
-| Ingesting text with checks and spans (`nl.Extract`) | Ingesting structure (go/types and SCIP, a netlist), which stays Go |
+| Ingesting text with checks and spans (`nl.ExtractSession`, the translator's `Extract`) | Ingesting structure (go/types and SCIP, a netlist), which stays Go |
 | Primitives any domain can use: aggregates, walks, the text functions | Its fast paths, as generators, and the model behind a similarity it needs |
 | The agent's surface: the MCP server, `ask`, actions, `Explain` and `Fix` | The pack (card, examples, hints, keys) and any tools of its own (`mcp.NewWith`) |
 | The measuring: `nl.Eval` and cost per answer | The benchmarks its users care about |

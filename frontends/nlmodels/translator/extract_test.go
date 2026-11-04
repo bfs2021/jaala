@@ -1,4 +1,4 @@
-package nl_test
+package translator_test
 
 import (
 	"context"
@@ -108,7 +108,7 @@ func TestExtract(t *testing.T) {
 	var out strings.Builder
 	for i, c := range cases {
 		m := model("small", c.replies...)
-		x, tr, err := nl.Extract(context.Background(), c.text, v, m, nl.ExtractOptions{Base: b, Pack: ownedPack()})
+		x, tr, err := extract(context.Background(), c.text, v, m, nl.ExtractOptions{Base: b, Pack: ownedPack()})
 		if err != nil {
 			t.Fatalf("%s: %v", c.name, err)
 		}
@@ -162,7 +162,7 @@ func TestAnExtractedFactReplacesTheOneHeldUnderItsKey(t *testing.T) {
 			"+ owner(\"app\", \"bob\") [text:0-16]\n"},
 	}
 	for _, c := range cases {
-		x, _, err := nl.Extract(context.Background(), text, v, model("m", c.lines), nl.ExtractOptions{Base: c.base, Pack: ownedPack()})
+		x, _, err := extract(context.Background(), text, v, model("m", c.lines), nl.ExtractOptions{Base: c.base, Pack: ownedPack()})
 		if err != nil {
 			t.Fatalf("%s: %v", c.name, err)
 		}
@@ -170,7 +170,7 @@ func TestAnExtractedFactReplacesTheOneHeldUnderItsKey(t *testing.T) {
 			t.Errorf("%s: changes\n%s\nwant\n%s", c.name, got, c.want)
 		}
 	}
-	x, _, err := nl.Extract(context.Background(), text, v, model("m", `+ owner("app", "bob") from "Bob owns app now"`), nl.ExtractOptions{Base: b, Pack: &nl.Pack{}})
+	x, _, err := extract(context.Background(), text, v, model("m", `+ owner("app", "bob") from "Bob owns app now"`), nl.ExtractOptions{Base: b, Pack: &nl.Pack{}})
 	if err != nil || changesText(x.Changes) != "+ owner(\"app\", \"bob\") [text:0-16]\n" {
 		t.Errorf("no keys: %q, %v; want only the addition", changesText(x.Changes), err)
 	}
@@ -204,7 +204,7 @@ func TestAQuotedKeyReplacesTheFactHeldUnderIt(t *testing.T) {
 			"- owner(\"say \\\"hi\\\"\", \"alice\")\n- owner(\"say \\\"hi\\\"\", \"bob\")\n+ owner(\"say \\\"hi\\\"\", \"carol\") [text:23-41]\n"},
 	}
 	for _, c := range cases {
-		x, _, err := nl.Extract(context.Background(), text, v, model("m", c.lines), nl.ExtractOptions{Base: b, Pack: pack})
+		x, _, err := extract(context.Background(), text, v, model("m", c.lines), nl.ExtractOptions{Base: b, Pack: pack})
 		if err != nil {
 			t.Fatalf("%s: %v", c.name, err)
 		}
@@ -241,7 +241,7 @@ func TestExtractRefusesALineItCantHold(t *testing.T) {
 	}
 	for _, c := range cases {
 		m := model("m", c.line)
-		_, tr, err := nl.Extract(context.Background(), text, v, m, nl.ExtractOptions{MaxTries: 1})
+		_, tr, err := extract(context.Background(), text, v, m, nl.ExtractOptions{MaxTries: 1})
 		if err == nil || len(tr.Tries) != 1 {
 			t.Fatalf("%s: %v, %d tries; want a refusal", c.name, err, len(tr.Tries))
 		}
@@ -249,10 +249,14 @@ func TestExtractRefusesALineItCantHold(t *testing.T) {
 			t.Errorf("%s: kind %q, want %q (%v)", c.name, tr.Tries[0].Kind, c.kind, tr.Tries[0].Err)
 		}
 		m2 := model("m", c.line, `+ imports("app", "api") from "app imports api"`)
-		if _, _, err := nl.Extract(context.Background(), text, v, m2, nl.ExtractOptions{}); err != nil {
+		if _, _, err := extract(context.Background(), text, v, m2, nl.ExtractOptions{}); err != nil {
 			t.Fatalf("%s: the fixed draft: %v", c.name, err)
 		}
-		fb := m2.asked[1].Turns[len(m2.asked[1].Turns)-1].Text
+		last := m2.asked[1].Turns[len(m2.asked[1].Turns)-1]
+		if last.Role != nl.RoleUser {
+			t.Errorf("%s: the feedback went back as %q, not the user's turn", c.name, last.Role)
+		}
+		fb := last.Text
 		for _, want := range c.feedback {
 			if !strings.Contains(fb, want) {
 				t.Errorf("%s: feedback lacks %q:\n%s", c.name, want, fb)
@@ -267,7 +271,7 @@ func TestExtractMovesARepeatedDraftToTheFallback(t *testing.T) {
 	bad := `+ imports("app", "api") from "nowhere"`
 	m := model("small", bad, bad)
 	fb := model("big", `+ imports("app", "api") from "app imports api"`)
-	x, tr, err := nl.Extract(context.Background(), "app imports api.", v, m, nl.ExtractOptions{Fallback: fb})
+	x, tr, err := extract(context.Background(), "app imports api.", v, m, nl.ExtractOptions{}, fb)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -292,7 +296,7 @@ func TestAPackWhoseExtractionDoesntCheckFailsFirst(t *testing.T) {
 		{"example", nl.Pack{ExtractExamples: []nl.ExtractExample{{Text: "app is GPL.", Lines: `+ pkg("app", "GPL") from "app is GPL"`}}}, "extraction example 1: line 1:"},
 	} {
 		m := model("m")
-		_, _, err := nl.Extract(context.Background(), "x", v, m, nl.ExtractOptions{Pack: &c.pack})
+		_, _, err := extract(context.Background(), "x", v, m, nl.ExtractOptions{Pack: &c.pack})
 		if err == nil || !strings.Contains(err.Error(), c.want) || len(m.asked) != 0 {
 			t.Errorf("%s: %v after %d asks; want %q before any", c.name, err, len(m.asked), c.want)
 		}
@@ -306,7 +310,7 @@ func TestAPackWhoseExtractionDoesntCheckFailsFirst(t *testing.T) {
 func TestExtractStopsAtItsBudget(t *testing.T) {
 	v, _ := owned(t)
 	bad := func(where string) string { return `+ imports("app", "api") from "` + where + `"` }
-	_, tr, err := nl.Extract(context.Background(), "app imports api.", v, model("m", bad("nowhere"), bad("elsewhere"), bad("anywhere")), nl.ExtractOptions{Budget: nl.Budget{Tokens: 150}})
+	_, tr, err := extract(context.Background(), "app imports api.", v, model("m", bad("nowhere"), bad("elsewhere"), bad("anywhere")), nl.ExtractOptions{Budget: nl.Budget{Tokens: 150}})
 	var spent *nl.BudgetSpent
 	if !errors.As(err, &spent) || len(tr.Tries) != 2 {
 		t.Errorf("%v after %d tries; want a BudgetSpent after 2", err, len(tr.Tries))

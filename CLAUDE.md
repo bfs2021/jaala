@@ -94,8 +94,9 @@ GOARCH=wasm go test ./ns` (#417 ran `ns` that way).
   comparison, or for a call arithmetic wrote (`num.mul` for `?a * ""`) the constant itself (#353). A new check builds one (`checkErr(kind, msg)`, `b.arityErr`, `b.unknownErr`), and
   `TestBrokenProgramsFailTheSameWay` requires each broken literal's error to be one Locate finds.
   `nl` (the card, Explain, the `Session`) imports `ns` and `datalog`, is a module of its own (#359; CI's
-  `nl` job), and nothing in the root imports it. It runs no model and keeps no agent loop since #496:
-  the loop is `nlmodels/translator`'s, on chakra Runners, over nl's `Session` (below). A refused draft
+  `nl` job), and nothing in the root imports it. It runs no model, keeps no agent loop and exports no
+  model interface (since #496 for translating, #502 for extracting): the loops are
+  `nlmodels/translator`'s, on chakra Runners, over nl's `Session` and `ExtractSession` (below). A refused draft
   goes back with `Explain`'s text, a failed model call, a repeated draft (#340, refused unchecked) or
   an empty answer (over `Options.Base`) moves straight to the fallback, which starts a fresh
   conversation (an empty answer with no fallback left goes back to the model, and its first repeat of
@@ -149,6 +150,11 @@ GOARCH=wasm go test ./ns` (#417 ran `ns` that way).
   replaces word for word, read through `Pack.prompts()` (nil-safe, field by field over
   `DefaultPrompts`); a new piece of prompt text goes there too, with a test in `prompts_test.go`. Its
   templates (`templates()`) are checked by `Pack.Validate` and up front in `NewSession`.
+  An `nl.ExtractSession` (`extract.go`, #502) is the same for a text's facts: `NewExtractSession` writes
+  the prefix and picks `ExtractGrammar`, and an `ExtractConversation` per model judges each reply into
+  an `ExtractVerdict` (the accepted `Extraction`, `Continue` with the refused line and `ExtractFix`, or
+  `Stop` on a repeat or the last try), which `Translator.Extract` (`extract.go` in the translator) runs
+  as a Runner turn's `TurnEnd` hook, `ExtractOptions.Fallback` becoming the `Config`'s fallback.
   An `nl.Session` (`session.go`, #496) is the question's half that is jaala's:
   `NewSession` writes the prefix, grounds and picks the grammar, `Act` runs an action, `Draw` and `Key`
   judge and key a vote's draw, `Pick` is the callables' first step, and a `Conversation` per model
@@ -165,8 +171,8 @@ GOARCH=wasm go test ./ns` (#417 ran `ns` that way).
   Try's tokens what the turn spent since the last Try or Step. Before `nl.Translate` went, #500's
   differential held the Runner to it over every eval script and arms for actions, votes and escalation,
   outcome for outcome and request for request; its tests then moved to `nlmodels/translator` with a
-  shim (`translate`, `internal/modeltest`: an `nl.Model` as a chakra Provider, its requests read back
-  as `nl.Prompt`s, a text action played as a tool call when the request offers that tool, chakra's
+  shim (`translate`, `internal/modeltest`: a test `Model`, what `nl.Model` was until #502, as a chakra
+  Provider, its requests read back as `Prompt`s (a system note keeping its role), a text action played as a tool call when the request offers that tool, chakra's
   guided finalizing call answered without asking the model), and their goldens didn't move.
   `differential_test.go` keeps its arms as path checks, `loop_test.go` what no moved test sees (tokens,
   the budget, tools dropped), and `server_test.go` runs the loop on selfcheck's `llama-server`, whose
@@ -197,8 +203,7 @@ GOARCH=wasm go test ./ns` (#417 ran `ns` that way).
   (`agent.NewLlamaCppProvider`, `agent.NewOllamaProvider`, chakra#180, v0.2.2); the grammar and a
   vote's seed go only where `agent.CapabilitiesOf` says the provider can (llama.cpp both, Ollama a
   seed, Anthropic neither) and a temperature only where it says `Temperature`, which is 0 by default,
-  since chakra omits a nil one and llama-server then samples at 0.8. Its `chakra` package is an
-  `nl.Model` over a provider, which `nl.Extract` still asks through. Its `translator`
+  since chakra omits a nil one and llama-server then samples at 0.8. Its `translator`
   package (#490) is the entry point a host calls (`translator.New(v, pack, cfg)`, `Ask`): jaala owns
   each role's tuning (temperature 0 and a fallback's 0.7, 512 tokens, a `Thinking` model's 3072, no
   grammar, a think line and its last fenced block), a `Role` overrides it, and a temperature goes only to a provider whose
@@ -718,7 +723,7 @@ GOARCH=wasm go test ./ns` (#417 ran `ns` that way).
   `*ParseError` with `Line`, `Column` (runes) and `Offset`; `Error()` is the message alone. A string
   takes no escapes, but a backslash keeps the next character in it, so `\"` is a quote inside and both
   stay in the value (#314: Declaire's regexes write `\"`). So query text can't spell a value holding a bare quote: code looking a host's value up binds it
-  (`datalog.Bind`) rather than writing it into text, and `nl.Extract` reads a draft's text values
+  (`datalog.Bind`) rather than writing it into text, and an extraction (`readDraft`) reads a draft's text values
   unescaped, as it reads the `from` words (#444: a quoted key never found the host's fact). The old parser is frozen as test code
   (`slicer_test.go`, every change to it marked), and `FuzzParseAgreesWithSlicer` and
   `TestATypoGetsTheSlicersMessage` hold the two to the same `Query` and the same message word for
@@ -1343,7 +1348,8 @@ exercise-graph-server`; its tickets are #411 (`stores/bolt`), #412 (pushdown as 
 (checking a Cypher database against jaala), declaire#339 and agni#1073, the last two left with the
 hosts. `mission_text_memory` (#437, filed 2026-10-19, `mission:active` from 2026-10-26) is a host's assistant extracting what it was told into versions and
 answering from them, for less money and time per correct answer than reading the history: #414
-(`nl.Extract`, whose eval makes its exercise's first half runnable), then #415 (P1, its first PR a
+(`nl.Extract`, whose eval makes its exercise's first half runnable; since #502 the translator's
+`Extract` over an `nl.ExtractSession`, and `TestExtract` in `frontends/nlmodels/translator`), then #415 (P1, its first PR a
 `make exercise-memory` target running the one-shot arm on an oracle subset), LongMemEval used to find which
 primitives an agent lacks (arms that hold the model fixed and vary the layer), not to rank jaala as an
 agent. Epic #455 lists those primitives and which side owns each; the split between jaala and its

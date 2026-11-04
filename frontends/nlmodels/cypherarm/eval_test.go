@@ -22,9 +22,9 @@ type scripted struct{}
 
 func (scripted) Name() string { return "scripted" }
 
-func (scripted) Complete(_ context.Context, p nl.Prompt) (nl.Completion, error) {
+func (scripted) Complete(_ context.Context, p modeltest.Prompt) (modeltest.Completion, error) {
 	ds := guide.CypherDrafts[p.Turns[0].Text]
-	return nl.Completion{Text: ds[min(len(p.Turns)/2, len(ds)-1)]}, nil // a refused draft adds two turns
+	return modeltest.Completion{Text: ds[min(len(p.Turns)/2, len(ds)-1)]}, nil // a refused draft adds two turns
 }
 
 // translate is the translator (modeltest.Translate) with the Cypher front end over the guide's graph, running each draft over b.
@@ -77,15 +77,15 @@ func TestEval(t *testing.T) {
 // turnsOf scripts a model per question, recording every prompt it was sent.
 type turnsOf struct {
 	drafts map[string][]string
-	sent   *[]nl.Prompt
+	sent   *[]modeltest.Prompt
 }
 
 func (turnsOf) Name() string { return "scripted" }
 
-func (m turnsOf) Complete(_ context.Context, p nl.Prompt) (nl.Completion, error) {
+func (m turnsOf) Complete(_ context.Context, p modeltest.Prompt) (modeltest.Completion, error) {
 	*m.sent = append(*m.sent, p)
 	ds := m.drafts[p.Turns[0].Text]
-	return nl.Completion{Text: ds[min(len(p.Turns)/2, len(ds)-1)]}, nil
+	return modeltest.Completion{Text: ds[min(len(p.Turns)/2, len(ds)-1)]}, nil
 }
 
 // The translator takes a constant column on its first draft (#454), and a test returned as a value is
@@ -94,7 +94,7 @@ func (m turnsOf) Complete(_ context.Context, p nl.Prompt) (nl.Completion, error)
 func TestTheTranslatorTakesAConstantColumnAndTellsATestToMoveToWhere(t *testing.T) {
 	v, b := guide.Deps(t)
 	fe := cypher.NewFrontEnd(depsGraph)
-	var sent []nl.Prompt
+	var sent []modeltest.Prompt
 	model := turnsOf{map[string][]string{
 		"is app a package?": {`MATCH (p:Package {name: 'app'}) RETURN p.name, 'yes' AS found`},
 		"does log import util?": {

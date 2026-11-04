@@ -5,26 +5,22 @@ import (
 	"errors"
 	"fmt"
 	"strings"
-	"time"
 	"unicode/utf8"
 
 	"github.com/panyam/jaala/datalog"
 	"github.com/panyam/jaala/ns"
 )
 
-// ExtractOptions tune Extract. The zero value tries the model three times and checks each fact
-// against the vocabulary alone.
+// ExtractOptions tune an extraction (ExtractSession, nlmodels' Translator.Extract). The zero value
+// tries the model three times and checks each fact against the vocabulary alone.
 type ExtractOptions struct {
 	// MaxTries is how many drafts each model gets; 3 when 0.
 	MaxTries int
-	// Fallback, when set, is asked once Model runs out of tries or repeats a draft it was told was
-	// wrong, in a fresh conversation.
-	Fallback Model
 	// Base, when set, is what the host holds already: an added fact whose Pack.Keys match one of its
 	// facts with other values replaces that fact. Eval are the options it is read with.
 	Base *datalog.Base
 	Eval []datalog.Option
-	// Grammar replaces the grammar every Prompt carries, ExtractGrammar(v) by default. NoGrammar
+	// Grammar replaces the grammar a reply is held to, ExtractGrammar(v) by default. NoGrammar
 	// sends none.
 	Grammar   string
 	NoGrammar bool
@@ -32,11 +28,11 @@ type ExtractOptions struct {
 	// ExtractExamples follow those, checked before any model is asked, and its Keys say which arguments
 	// identify a fact.
 	Pack *Pack
-	// Budget caps the tokens and time Extract spends on the text.
+	// Budget caps the tokens and time the extraction spends on the text.
 	Budget Budget
 }
 
-// An Extraction is what Extract accepted: the change set, every line read from the draft in order,
+// An Extraction is what an extraction accepted: the change set, every line read from the draft in order,
 // the draft as the model wrote it less any Markdown fence, and the model that wrote it.
 type Extraction struct {
 	Changes ns.Changes
@@ -60,13 +56,13 @@ type Fact struct {
 	Replaced   [][]ns.Value
 }
 
-// An ExtractExample is a text with the lines Extract should write for it, which the model reads before
+// An ExtractExample is a text with the lines an extraction should write for it, which the model reads before
 // it writes its own.
 type ExtractExample struct {
 	Text, Lines string
 }
 
-// The Try kinds only Extract gives.
+// The Try kinds only an extraction gives.
 const (
 	// KindSpan is a line whose quoted words aren't in the text.
 	KindSpan = "span"
@@ -74,7 +70,7 @@ const (
 	KindDerived = "derived"
 )
 
-// extractInstructions follow the relations in every Extract Prompt's Prefix.
+// extractInstructions follow the relations in every extraction's prefix.
 const extractInstructions = `
 # Write the facts the text states, one per line, using only the relations above:
 #   + relation("value", ...) from "the words of the text that state it"
@@ -85,85 +81,116 @@ const extractInstructions = `
 # states no fact.
 `
 
-// Extract asks m for the facts text states over v's base relations (#414), as a change set the host
-// can apply: it drafts, reads each line as a fact (+ or -), checks its values as datalog.Validate
-// checks a query's constants (types, closed domains, units) and that the quoted words are in text,
-// and feeds the first refusal back for m to fix, up to o.MaxTries times, then hands the text to
-// o.Fallback the same way. Each added fact cites its words as text:<start>-<end>, byte offsets into
-// text. A fact whose relation has Pack.Keys replaces the facts the Base, or an earlier line, holds
-// under the same key with other values: the change set removes them, since the engine never decides
-// which facts are one. A pack whose examples or keys don't check fails Extract before any model is
-// asked. The Trace holds every try, also when Extract fails, and the error then wraps the last try's.
-func Extract(ctx context.Context, text string, v *ns.Vocabulary, m Model, o ExtractOptions) (Extraction, Trace, error) {
-	var tr Trace
+// An ExtractSession is one text's half of an extraction that is jaala's (#414, #502): the prefix, the
+// grammar, and how a reply is read and judged. It runs no model and keeps no loop: nlmodels'
+// translator drives one on chakra Runners (Translator.Extract), and any agent framework's loop can
+// drive one the same way, asking the model itself and handing each reply to an ExtractConversation.
+//
+// A reply is read line by line as facts (+ or -), each checked as datalog.Validate checks a query's
+// constants (types, closed domains, units) and for quoting words the text holds. Each added fact
+// cites its words as text:<start>-<end>, byte offsets into the text. A fact whose relation has
+// Pack.Keys replaces the facts the Base, or an earlier line, holds under the same key with other
+// values: the change set removes them, since the engine never decides which facts are one.
+type ExtractSession struct {
+	text, prefix, grammar string
+	v                     *ns.Vocabulary
+	o                     ExtractOptions
+	pr                    Prompts
+	tries                 int
+}
+
+// NewExtractSession prepares text over v's base relations, as an extraction does before asking any
+// model: it checks the pack's examples and keys, writes the prefix and picks the grammar. An error is
+// one the extraction fails with.
+func NewExtractSession(text string, v *ns.Vocabulary, o ExtractOptions) (*ExtractSession, error) {
 	prefix, err := extractPrefix(v, o.Pack)
 	if err != nil {
-		return Extraction{}, tr, err
+		return nil, err
 	}
-	grammar := o.Grammar
+	s := &ExtractSession{text: text, prefix: prefix, v: v, o: o, pr: o.Pack.prompts(), tries: o.MaxTries}
 	switch {
 	case o.NoGrammar:
-		grammar = ""
-	case grammar == "":
-		if grammar, err = ExtractGrammar(v); err != nil {
-			return Extraction{}, tr, err
+	case o.Grammar != "":
+		s.grammar = o.Grammar
+	default:
+		if s.grammar, err = ExtractGrammar(v); err != nil {
+			return nil, err
 		}
 	}
-	tries := o.MaxTries
-	if tries <= 0 {
-		tries = 3
+	if s.tries <= 0 {
+		s.tries = 3
 	}
-	spend := &spending{budget: o.Budget, start: time.Now()}
-	models := []Model{m}
-	if o.Fallback != nil {
-		models = append(models, o.Fallback)
-	}
-	var last error
-	for _, model := range models {
-		turns := []Turn{{RoleUser, "Text:\n" + text}}
-		refused := map[string]error{}
-		for t := 0; t < tries; t++ {
-			if err := ctx.Err(); err != nil {
-				return Extraction{}, tr, err
-			}
-			if err := spend.check(); err != nil {
-				return Extraction{}, tr, err
-			}
-			try := Try{Model: model.Name()}
-			start := time.Now()
-			c, err := model.Complete(ctx, Prompt{Prefix: prefix, Turns: turns, Grammar: grammar})
-			try.Latency = time.Since(start)
-			if err != nil {
-				try.Err, try.Kind = err, KindModel
-				tr.Tries = append(tr.Tries, try)
-				last = fmt.Errorf("model %s: %w", try.Model, err)
-				break
-			}
-			try.TokensIn, try.TokensOut, try.TokensCached = c.TokensIn, c.TokensOut, c.TokensCached
-			spend.add(c.TokensIn, c.TokensOut)
-			try.Text = unfence(c.Text)
-			if first, ok := refused[try.Text]; ok {
-				try.Err, try.Kind = fmt.Errorf("the same draft as before: %w", first), KindRepeat
-				tr.Tries = append(tr.Tries, try)
-				last = try.Err
-				break
-			}
-			x, err := readDraft(ctx, text, try.Text, v, o.Pack, o.Base, o.Eval)
-			if err == nil {
-				tr.Tries = append(tr.Tries, try)
-				x.Text, x.Model = try.Text, try.Model
-				return x, tr, nil
-			}
-			try.Err, try.Kind = err, extractKind(err)
-			tr.Tries = append(tr.Tries, try)
-			last = err
-			refused[try.Text] = err
-			why := strings.TrimRight(explainLine(err), "\n")
-			turns = append(turns, Turn{RoleModel, try.Text}, Turn{RoleUser, why + "\n\n" + o.Pack.prompts().ExtractFix})
-		}
-	}
-	return Extraction{}, tr, fmt.Errorf("nl: no facts checked after %d tries: %w", len(tr.Tries), last)
+	return s, nil
 }
+
+// Prefix is what every prompt of the session starts with: the relations, the instructions, and the
+// pack's About, Card and extraction examples.
+func (s *ExtractSession) Prefix() string { return s.prefix }
+
+// Ask is the session's first message, the text.
+func (s *ExtractSession) Ask() string { return "Text:\n" + s.text }
+
+// Grammar is the GBNF a reply is held to, ExtractGrammar by default, "" with NoGrammar.
+func (s *ExtractSession) Grammar() string { return s.grammar }
+
+// MaxTries is how many replies a model gets in one ExtractConversation.
+func (s *ExtractSession) MaxTries() int { return s.tries }
+
+// An ExtractConversation is one model's turn at the text: it judges each reply against the drafts
+// that model was told were wrong. A fallback model starts a new one.
+type ExtractConversation struct {
+	s       *ExtractSession
+	refused map[string]error
+	tries   int
+}
+
+// NewConversation starts a model's turn.
+func (s *ExtractSession) NewConversation() *ExtractConversation {
+	return &ExtractConversation{s: s, refused: map[string]error{}}
+}
+
+// An ExtractVerdict is what an ExtractConversation makes of one reply. Exactly one of Extraction,
+// Continue and Stop is set.
+type ExtractVerdict struct {
+	// Extraction is the accepted draft, its Text and Model set.
+	Extraction *Extraction
+	// Continue is what the model is told next, as the user's message: the refused line, where in it,
+	// and what to do.
+	Continue string
+	// Stop ends the model's turn: it repeated a draft it was told was wrong, or ran out of tries. It
+	// wraps the last refusal.
+	Stop error
+	// Try is the reply's try, to record.
+	Try Try
+}
+
+// Judge reads and checks one reply. try carries it: Model, Text (a Markdown fence is taken off) and
+// what it cost.
+func (c *ExtractConversation) Judge(ctx context.Context, try Try) ExtractVerdict {
+	s := c.s
+	c.tries++
+	try.Text = unfence(try.Text)
+	if first, ok := c.refused[try.Text]; ok {
+		try.Err, try.Kind = fmt.Errorf("the same draft as before: %w", first), KindRepeat
+		return ExtractVerdict{Stop: try.Err, Try: try}
+	}
+	x, err := readDraft(ctx, s.text, try.Text, s.v, s.o.Pack, s.o.Base, s.o.Eval)
+	if err == nil {
+		x.Text, x.Model = try.Text, try.Model
+		return ExtractVerdict{Extraction: &x, Try: try}
+	}
+	try.Err, try.Kind = err, extractKind(err)
+	c.refused[try.Text] = err
+	if c.tries >= s.tries {
+		return ExtractVerdict{Stop: err, Try: try}
+	}
+	why := strings.TrimRight(explainLine(err), "\n")
+	return ExtractVerdict{Continue: why + "\n\n" + s.pr.ExtractFix, Try: try}
+}
+
+// ErrNoFacts is what an extraction fails with when every model ran out of tries, or stopped, with no
+// draft accepted; the error wraps the last try's.
+var ErrNoFacts = errors.New("nl: no facts checked")
 
 // extractPrefix is every text's Prefix: v's base relations, the instructions, then the pack's About,
 // Card and extraction examples, each checked first.
@@ -252,7 +279,7 @@ func baseRelations(v *ns.Vocabulary) ([]callee, error) {
 	return out, nil
 }
 
-// ExtractGrammar is GBNF holding a reply to Extract over v: lines of + or - and a fact of one of v's
+// ExtractGrammar is GBNF holding a reply to an extraction over v: lines of + or - and a fact of one of v's
 // base relations at its arity, each argument a constant, or one of a closed domain's values, and after
 // an added fact the quoted words it came from. Like GrammarFor, it is built once per state of v.
 func ExtractGrammar(v *ns.Vocabulary) (string, error) {
