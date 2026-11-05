@@ -207,7 +207,11 @@ GOARCH=wasm go test ./ns` (#417 ran `ns` that way).
   package (#490) is the entry point a host calls (`translator.New(v, pack, cfg)`, `Ask`): jaala owns
   each role's tuning (temperature 0 and a fallback's 0.7, 512 tokens, a `Thinking` model's 3072, no
   grammar, a think line and its last fenced block), a `Role` overrides it, and a temperature goes only to a provider whose
-  `CapabilitiesOf` says it takes one (chakra#191, v0.2.4). jaala's agent loop runs on chakra (#496),
+  `CapabilitiesOf` says it takes one (chakra#191, v0.2.4). A `Role` with `TextActions` (#509) is for a
+  model that can't call tools (Qwen2.5-Coder under `--jinja` writes a call as JSON text): it gets no
+  tools, `Session.TextActions`' prefix and grammar, its replies read with `nl.ReadAction` in the
+  `TurnEnd` hook, and once its steps run out the request stage sets `StepView.Guided` to the draft's
+  grammar (chakra#259, v0.2.9). jaala's agent loop runs on chakra (#496),
   jaala the Session a chakra agent plugs in, never a wrapper over it. `Translate(ctx, q, o, model,
   fallback)` is `Ask` under per-call options and roles, which is `mcp.Translator`'s method.
   CI's `nlmodels` job tests it; the root's `./...` doesn't reach it. Like every

@@ -175,31 +175,32 @@ func reask(pr Prompts, what, told string, err error, frontEnd bool, cands []Cand
 	return fmt.Sprintf(pr.Reask, what, told, grounded(pr.Grounded, cands), change)
 }
 
-// promptPrefix is every question's Prefix: the card and instructions, jaala's or the front end's, then
-// the pack's part, with the front end's examples in place of the pack's. Examples are checked first,
-// so a broken one fails the translator before any model is asked.
-func promptPrefix(v *ns.Vocabulary, o Options) (string, error) {
+// promptPrefix is every question's Prefix in two parts, with the text actions' instructions between
+// them for a model that writes its actions: the card and instructions, jaala's or the front end's,
+// then the pack's part, with the front end's examples in place of the pack's. Examples are checked
+// first, so a broken one fails the translator before any model is asked.
+func promptPrefix(v *ns.Vocabulary, o Options) (head, actions, tail string, err error) {
 	fe := o.FrontEnd
 	if fe == nil {
 		card, err := Card(v)
 		if err != nil {
-			return "", err
+			return "", "", "", err
 		}
-		prefix := card + o.Pack.prompts().Instructions
-		if o.Actions.replies() {
-			prefix += actionsPrefix(nil, o.grounder != nil, o.Pack.prompts())
+		head = card + o.Pack.prompts().Instructions
+		if o.Actions != nil {
+			actions = actionsPrefix(nil, o.grounder != nil, o.Pack.prompts())
 		}
 		if o.Pack != nil {
 			if err := o.Pack.Validate(v); err != nil {
-				return "", err
+				return "", "", "", err
 			}
-			prefix += o.Pack.Prefix()
+			tail = o.Pack.Prefix()
 		}
-		return prefix, nil
+		return head, actions, tail, nil
 	}
 	card, err := fe.Card(v)
 	if err != nil {
-		return "", err
+		return "", "", "", err
 	}
 	examples := fe.Examples()
 	for i, e := range examples {
@@ -208,25 +209,25 @@ func promptPrefix(v *ns.Vocabulary, o Options) (string, error) {
 			err = datalog.Validate(c.Query, v)
 		}
 		if err != nil {
-			return "", fmt.Errorf("nl: the front end's example %d (%q): %w", i+1, e.Question, err)
+			return "", "", "", fmt.Errorf("nl: the front end's example %d (%q): %w", i+1, e.Question, err)
 		}
 	}
 	instr := fe.Instructions()
 	if s, ok := o.Pack.prompts().FrontEndInstructions[fe.Language()]; ok {
 		instr = s
 	}
-	prefix := card + instr
-	if o.Actions.replies() {
-		prefix += actionsPrefix(fe, o.grounder != nil, o.Pack.prompts())
+	head = card + instr
+	if o.Actions != nil {
+		actions = actionsPrefix(fe, o.grounder != nil, o.Pack.prompts())
 	}
 	if o.Pack != nil {
 		p := *o.Pack
 		p.Examples = examples
-		prefix += p.Prefix()
+		tail = p.Prefix()
 	} else if len(examples) > 0 {
-		prefix += (&Pack{Examples: examples}).Prefix()
+		tail = (&Pack{Examples: examples}).Prefix()
 	}
-	return prefix, nil
+	return head, actions, tail, nil
 }
 
 // errEmpty is a program that checked and answered nothing.

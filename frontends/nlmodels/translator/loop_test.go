@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"strings"
 	"testing"
 	"time"
 
@@ -166,3 +167,120 @@ func (r *recordingProvider) Generate(ctx context.Context, req agent.ProviderRequ
 }
 
 func (r *recordingProvider) ProviderCapabilities() agent.Capabilities { return llamaCaps }
+
+// A TextActions role is offered no tools: its prefix lists the actions, a reply that is one is a
+// Step, and every reply is held to the action grammar until its steps run out, then to the draft's.
+// control: the same script on a tool role takes its look as a tool call.
+func TestATextRoleTakesItsActionsInItsReplies(t *testing.T) {
+	v, b := guide.Deps(t)
+	replies := map[string][]string{mitQ: {"look pkg", `pkg(?p, "nope") => ?p`, mit}}
+	rec := &recordingProvider{Provider: scripted("small", replies)}
+	tr, err := New(v, nil, Config{Model: Role{Provider: rec, TextActions: true}, Base: b, Actions: &nl.Actions{Steps: 1}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	p, trace, err := tr.Ask(context.Background(), mitQ)
+	if err != nil || p.Text != mit {
+		t.Fatalf("Ask = %+v, %v", p, err)
+	}
+	if len(trace.Steps) != 1 || trace.Steps[0].Action != nl.ActionLook || !strings.Contains(trace.Steps[0].Result, "pkg(name, license)") {
+		t.Fatalf("steps %+v", trace.Steps)
+	}
+	if len(trace.Tries) != 2 || trace.Tries[0].Kind != nl.KindEmpty {
+		t.Fatalf("tries %+v", trace.Tries)
+	}
+	if len(rec.reqs) != 3 {
+		t.Fatalf("%d requests", len(rec.reqs))
+	}
+	for i, req := range rec.reqs {
+		if len(req.Tools) != 0 || !strings.Contains(req.Instructions, "values TARGET") || req.Guided == nil {
+			t.Errorf("request %d: %d tools, actions listed %v, grammar %v", i, len(req.Tools), strings.Contains(req.Instructions, "values TARGET"), req.Guided != nil)
+		}
+	}
+	if g := rec.reqs[0].Guided; g == nil || !strings.Contains(g.Grammar, `"look "`) {
+		t.Errorf("the first request's grammar has no actions")
+	}
+	for _, i := range []int{1, 2} {
+		if g := rec.reqs[i].Guided; g == nil || strings.Contains(g.Grammar, `"look "`) || !strings.HasPrefix(g.Grammar, "root ::=") {
+			t.Errorf("request %d, after the last step, is held to the actions", i)
+		}
+	}
+	if last := rec.reqs[1].Messages; len(last) != 3 || last[1].Text != "look pkg" || last[2].Role != agent.RoleUser {
+		t.Errorf("the look went back as %+v", last)
+	}
+
+	ctl := &recordingProvider{Provider: scripted("small", replies)}
+	tools, err := New(v, nil, Config{Model: Role{Provider: ctl}, Base: b, Actions: &nl.Actions{Steps: 1}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, trace, err := tools.Ask(context.Background(), mitQ); err != nil || len(trace.Steps) != 1 || len(ctl.reqs[0].Tools) != 3 {
+		t.Errorf("control: %v, steps %d, tools %d", err, len(trace.Steps), len(ctl.reqs[0].Tools))
+	}
+}
+
+// A text step is charged its own call, and the answer after it only its own, with no guided call
+// to rewrite it. control: the turn made two calls.
+func TestATextStepCarriesItsOwnTokens(t *testing.T) {
+	v, b := guide.Deps(t)
+	m := &metered{script: scripted("small", map[string][]string{mitQ: {"look pkg", mit}}), in: 10, out: 1}
+	tr, err := New(v, nil, Config{Model: Role{Provider: m, Label: "small", TextActions: true}, Base: b, Actions: &nl.Actions{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, trace, err := tr.Ask(context.Background(), mitQ)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// calls: 1 the look (10, 1), 2 the answer (20, 2)
+	if len(trace.Steps) != 1 || trace.Steps[0].TokensIn != 10 || trace.Steps[0].TokensOut != 1 || trace.Steps[0].Model != "small" {
+		t.Errorf("step %+v", trace.Steps)
+	}
+	if len(trace.Tries) != 1 || trace.Tries[0].TokensIn != 20 || trace.Tries[0].TokensOut != 2 {
+		t.Errorf("try %+v", trace.Tries)
+	}
+	if m.calls != 2 {
+		t.Errorf("control: %d calls", m.calls)
+	}
+}
+
+// TextActions is per role: a text model's turn offers no tools, and the tool fallback after it is
+// offered them, its prefix not listing the text actions.
+func TestATextModelFallsBackToAToolModel(t *testing.T) {
+	v, b := guide.Deps(t)
+	small := &recordingProvider{Provider: scripted("small", map[string][]string{mitQ: {"look pkg", `pkg(?p, "nope") => ?p`}})}
+	big := &recordingProvider{Provider: scripted("big", map[string][]string{mitQ: {"look pkg", mit}})}
+	tr, err := New(v, nil, Config{Model: Role{Provider: small, TextActions: true}, Fallback: Role{Provider: big}, Base: b, Actions: &nl.Actions{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	p, trace, err := tr.Ask(context.Background(), mitQ)
+	if err != nil || p.Text != mit || p.Model != "fallback" {
+		t.Fatalf("Ask = %+v, %v", p, err)
+	}
+	if len(trace.Steps) != 2 || trace.Steps[0].Model != "model" || trace.Steps[1].Model != "fallback" {
+		t.Errorf("steps %+v", trace.Steps)
+	}
+	if len(small.reqs) != 2 || len(small.reqs[0].Tools) != 0 || !strings.Contains(small.reqs[0].Instructions, "values TARGET") {
+		t.Errorf("the text model: %d requests, %d tools", len(small.reqs), len(small.reqs[0].Tools))
+	}
+	if len(big.reqs) == 0 || len(big.reqs[0].Tools) != 3 || big.reqs[0].Guided != nil || strings.Contains(big.reqs[0].Instructions, "values TARGET") {
+		t.Errorf("the tool fallback: %d requests, %d tools", len(big.reqs), len(big.reqs[0].Tools))
+	}
+}
+
+// Compact sends a text role one turn holding what its actions found.
+func TestATextRoleCompacts(t *testing.T) {
+	v, b := guide.Deps(t)
+	rec := &recordingProvider{Provider: scripted("small", map[string][]string{mitQ: {"values pkg.license", mit}})}
+	tr, err := New(v, nil, Config{Model: Role{Provider: rec, TextActions: true}, Base: b, Actions: &nl.Actions{Compact: true}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, trace, err := tr.Ask(context.Background(), mitQ); err != nil || len(trace.Steps) != 1 {
+		t.Fatalf("%v, steps %+v", err, trace.Steps)
+	}
+	if ms := rec.reqs[1].Messages; len(ms) != 1 || ms[0].Role != agent.RoleUser || !strings.Contains(ms[0].Text, `"MIT"`) {
+		t.Errorf("the second request: %+v", ms)
+	}
+}

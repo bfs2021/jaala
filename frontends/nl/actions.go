@@ -87,6 +87,12 @@ func (a *Actions) sample() int {
 	return 10
 }
 
+// ReadAction reads a reply as an action and its argument, a Markdown fence taken off, for a loop whose
+// model writes its actions (Session.TextActions). ok is false for an answer, which goes to
+// Conversation.Judge, and so is a malformed action: look with no name, or with lines after it, is
+// judged as a draft.
+func ReadAction(reply string) (action, arg string, ok bool) { return readAction(unfence(reply)) }
+
 // readAction reads a reply as an action and its argument, ok false for an answer.
 func readAction(text string) (action, arg string, ok bool) {
 	first, rest, _ := strings.Cut(text, "\n")

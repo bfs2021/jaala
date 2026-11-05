@@ -76,6 +76,72 @@ func TestARealServerHoldsTheRunnersAnswersToTheGrammar(t *testing.T) {
 	}
 }
 
+// A real llama-server holds a TextActions role's replies to the action grammar (#509), which a
+// request stage switches to the draft's once the steps run out (chakra's StepView.Guided). Every reply
+// the loop read, an action or an answer, must be text the action grammar accepts, as a prefix when
+// the model was cut off; the draft grammar is a sublanguage of it.
+func TestARealServerHoldsATextRolesRepliesToTheActionGrammar(t *testing.T) {
+	url := os.Getenv("JAALA_LLAMACPP_URL")
+	if url == "" {
+		t.Skip("JAALA_LLAMACPP_URL is not set")
+	}
+	src := ns.NewMemSource().Declare("edge", "from", "to")
+	src.Add("edge", ns.Tuple{Vals: []ns.Value{ns.S("a"), ns.S("b")}})
+	v, err := ns.NewVocabulary(src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := v.AddLanguage(datalog.Language); err != nil {
+		t.Fatal(err)
+	}
+	b := datalog.MustBase(v, src)
+	acts := &nl.Actions{Steps: 2, Sample: 2}
+	s, err := nl.NewSession(context.Background(), "what calls what?", v, nil, nl.Options{Actions: acts})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, text := s.TextActions()
+	ours, err := gbnf.Parse(text)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p, err := agent.NewLlamaCppProvider(agent.LlamaCppConfig{BaseURL: url + "/v1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	warm := 1.2
+	tr, err := New(v, nil, Config{Model: Role{Provider: p, Temperature: &warm, MaxTokens: 80, TextActions: true}, Base: b, Actions: acts,
+		Options: func(o *nl.Options) { o.MaxTries = 3 }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, trace, _ := tr.Ask(context.Background(), "what calls what?")
+	read := 0
+	for _, st := range trace.Steps {
+		read++
+		if !ours.AcceptsPrefix(st.Text) {
+			t.Errorf("an action leaves the action grammar: %q", st.Text)
+		}
+	}
+	for _, try := range trace.Tries {
+		if try.Kind == nl.KindModel {
+			t.Fatalf("the server refused a call: %v", try.Err)
+		}
+		if try.Kind != nl.KindRepeat {
+			read++
+		}
+		if !ours.AcceptsPrefix(try.Text) {
+			t.Errorf("an answer leaves the action grammar: %q", try.Text)
+		}
+	}
+	if read == 0 {
+		t.Fatalf("control: no reply was read: %+v", trace)
+	}
+	if !t.Failed() {
+		t.Logf("%d steps and %d tries, all inside the action grammar", len(trace.Steps), len(trace.Tries))
+	}
+}
+
 // A real llama-server keeps Extract's replies to ExtractGrammar (#502), on the same test model: each
 // refused reply is still lines the grammar accepts, as a prefix when the model was cut off.
 func TestARealServerHoldsExtractsRepliesToItsGrammar(t *testing.T) {

@@ -23,6 +23,7 @@ type Session struct {
 	mem   *memory // what the actions have shown, across models, since it is about the data
 
 	prefix, ask, grammar, answerGrammar string
+	textPrefix, textGrammar             string // for a model that writes its actions (TextActions)
 	tries                               int
 	pick                                bool
 }
@@ -39,11 +40,15 @@ func NewSession(ctx context.Context, question string, v *ns.Vocabulary, g Ground
 	if err := pr.checkTemplates(); err != nil {
 		return nil, err
 	}
-	prefix, err := promptPrefix(v, o)
+	head, actions, tail, err := promptPrefix(v, o)
 	if err != nil {
 		return nil, err
 	}
-	s := &Session{v: v, o: o, pr: pr, prefix: prefix, ask: question,
+	prefix := head + tail
+	if o.Actions.replies() {
+		prefix = head + actions + tail
+	}
+	s := &Session{v: v, o: o, pr: pr, prefix: prefix, textPrefix: head + actions + tail, ask: question,
 		mem: &memory{found: pr.CompactFound, refused: pr.CompactRefused}}
 	if g != nil {
 		if s.cands, err = g.Ground(ctx, question); err != nil {
@@ -67,9 +72,12 @@ func NewSession(ctx context.Context, question string, v *ns.Vocabulary, g Ground
 	if err != nil {
 		return nil, err
 	}
-	s.grammar = s.answerGrammar
+	s.grammar, s.textGrammar = s.answerGrammar, s.answerGrammar
+	if o.Actions != nil && s.answerGrammar != "" {
+		s.textGrammar = actionGrammar(s.answerGrammar, g != nil)
+	}
 	if o.Actions.replies() {
-		s.grammar = actionGrammar(s.grammar, g != nil)
+		s.grammar = s.textGrammar
 	}
 	return s, nil
 }
@@ -116,6 +124,13 @@ func (s *Session) Grammar() string { return s.answerGrammar }
 // ActionGrammar is Grammar with the text actions around it (Options.Actions), for a model that writes
 // an action as its reply rather than calling it as a tool; Grammar when there are no actions.
 func (s *Session) ActionGrammar() string { return s.grammar }
+
+// TextActions is the prefix and grammar for a model that writes its actions as its reply, where
+// Prefix and ActionGrammar are for one that calls them as tools under Actions.AsTools (#509): the
+// prefix lists the actions, and the grammar takes an action or a draft. A loop offers such a model
+// no tools, reads each reply with ReadAction, and holds it to Grammar once its steps run out.
+// Without Options.Actions they are Prefix and Grammar.
+func (s *Session) TextActions() (prefix, grammar string) { return s.textPrefix, s.textGrammar }
 
 // MaxTries is how many answers a model gets in one Conversation before it ends.
 func (s *Session) MaxTries() int { return s.tries }
