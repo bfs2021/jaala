@@ -278,3 +278,41 @@ func TestASessionOffersItsActionsAsTools(t *testing.T) {
 		t.Errorf("tools without Actions")
 	}
 }
+
+// Under AsTools, TextActions still hands a model that writes its actions the prefix listing them
+// (find among them with a Grounder) and the grammar taking them, the same text the session writes
+// without AsTools. Without Actions it is Prefix and Grammar.
+func TestASessionKeepsItsTextActionsUnderAsTools(t *testing.T) {
+	v := vocabulary(t)
+	g := &grounder{cands: []nl.Candidate{{Name: "a", Values: []string{"a"}}}}
+	s, _ := nl.NewSession(context.Background(), "q", v, g, nl.Options{Actions: &nl.Actions{AsTools: true}})
+	plain, _ := nl.NewSession(context.Background(), "q", v, g, nl.Options{Actions: &nl.Actions{}})
+	prefix, grammar := s.TextActions()
+	if prefix != plain.Prefix() || grammar != plain.ActionGrammar() {
+		t.Errorf("TextActions differ from the text session's prefix and grammar")
+	}
+	if !strings.Contains(prefix, "#   find NAME") || !strings.Contains(grammar, `"find "`) || prefix == s.Prefix() {
+		t.Errorf("the text actions leave out find, or are the tools' prefix")
+	}
+	none, _ := nl.NewSession(context.Background(), "q", v, nil, nl.Options{})
+	if p, gr := none.TextActions(); p != none.Prefix() || gr != none.Grammar() {
+		t.Errorf("without Actions, TextActions is not Prefix and Grammar")
+	}
+}
+
+// ReadAction takes a fence off and reads the actions; a draft, or a look with no name, is an answer.
+func TestReadActionTellsAnActionFromAnAnswer(t *testing.T) {
+	for _, c := range []struct{ reply, action, arg string }{
+		{"look pkg", nl.ActionLook, "pkg"},
+		{"```\nvalues pkg.license\n```", nl.ActionValues, "pkg.license"},
+		{"try\npkg(?p, _) => ?p", nl.ActionTry, "pkg(?p, _) => ?p"},
+		{"find mit", nl.ActionFind, "mit"},
+		{`pkg(?p, "MIT") => ?p`, "", ""},
+		{"look", "", ""},
+	} {
+		action, arg, ok := nl.ReadAction(c.reply)
+		if action != c.action || arg != c.arg || ok != (c.action != "") {
+			t.Errorf("ReadAction(%q) = %q, %q, %v", c.reply, action, arg, ok)
+		}
+	}
+}

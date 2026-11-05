@@ -49,6 +49,13 @@ type Role struct {
 	// (#485). Like DefaultThinkPrompt it should ask for the program in a fenced block, which is what
 	// is read as the draft.
 	ThinkPrompt string
+	// TextActions is for a model that can't call tools (#509), such as Qwen2.5-Coder behind
+	// llama-server, which writes a tool call as JSON in its text. Such a role is offered no tools.
+	// Its prefix lists the actions, and it takes one by writing it as its reply (look NAME, values
+	// TARGET, try then a draft, find NAME). Each reply is held to a grammar of an action or a draft
+	// when the provider takes one. After its last step, its replies are held to the draft's grammar
+	// alone. It has no effect without Config.Actions.
+	TextActions bool
 }
 
 // Config is what a host decides per deployment. Everything else is jaala's default.

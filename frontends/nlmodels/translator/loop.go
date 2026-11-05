@@ -20,6 +20,7 @@ type role struct {
 	gen      agent.GenerationParams
 	think    string // the line a thinking model's prefix gains, "" for any other
 	guide    bool   // the provider takes a GBNF grammar and the model isn't thinking
+	text     bool   // the model writes its actions as its reply (Role.TextActions)
 }
 
 // runtime is r with the role's defaults where r leaves them.
@@ -28,7 +29,7 @@ func (r Role) runtime(label string, temp float64) *role {
 		label = r.Label
 	}
 	caps := agent.CapabilitiesOf(r.Provider)
-	rr := &role{label: label, provider: r.Provider, gen: agent.GenerationParams{MaxTokens: MaxTokens}}
+	rr := &role{label: label, provider: r.Provider, gen: agent.GenerationParams{MaxTokens: MaxTokens}, text: r.TextActions}
 	if caps.Temperature {
 		if r.Temperature != nil {
 			temp = *r.Temperature
@@ -165,21 +166,28 @@ type loop struct {
 	mark     time.Time   // when the last Try or Step was recorded, or the turn began
 }
 
-// turn asks r for an answer in conversation c: one Runner turn with the actions as tools, ended by
-// the Conversation's verdicts. It returns the accepted program and the history it was asked with,
+// turn asks r for an answer in conversation c: one Runner turn with the actions as tools, or read
+// from its replies for a TextActions role, ended by the Conversation's verdicts. It returns the accepted program and the history it was asked with,
 // errTurnOver when the turn ended without one (l.stop says why), or an error that ends the question.
 func (l *loop) turn(ctx context.Context, s *nl.Session, c *nl.Conversation, r *role) (nl.Program, []agent.Message, error) {
 	var accepted *nl.Program
 	l.stop = nil
+	prefix, grammar := s.Prefix(), s.Grammar()
+	if r.text {
+		prefix, grammar = s.TextActions()
+	}
 	cfg := agent.RunnerConfig{
 		Provider:       r.provider,
-		Instructions:   s.Prefix() + r.think,
+		Instructions:   prefix + r.think,
 		MaxSteps:       s.MaxTries() + s.MaxSteps() + 1,
 		Generation:     r.gen,
-		ResponseGuided: r.guided(s.Grammar()),
+		ResponseGuided: r.guided(grammar),
 		TurnEnd: []agent.TurnEndHook{func(ctx context.Context, info agent.TurnEndInfo) (agent.TurnEndVerdict, error) {
 			if err := l.timeUp(ctx); err != nil {
 				return agent.TurnEndVerdict{}, err
+			}
+			if result, ok := l.textAction(ctx, s, c, r, info); ok {
+				return agent.TurnEndVerdict{Continue: result, AsUser: true}, nil
 			}
 			vd := c.Judge(ctx, l.try(r, r.answer(info.Text), info.Usage))
 			l.tr.Tries = append(l.tr.Tries, vd.Tries...)
@@ -195,7 +203,7 @@ func (l *loop) turn(ctx context.Context, s *nl.Session, c *nl.Conversation, r *r
 		}},
 		StepStages: l.stages(s, c, r),
 	}
-	if tools := s.Tools(); tools != nil {
+	if tools := s.Tools(); tools != nil && !r.text {
 		cfg.Tools = l.tools(tools, c, r)
 	}
 	history := []agent.Message{{Role: agent.RoleUser, Text: c.Ask()}}
@@ -303,7 +311,7 @@ func (l *loop) try(r *role, text string, turn agent.Usage) nl.Try {
 }
 
 // stages name each call for the turn's usage, stop offering the actions once the model has taken
-// MaxSteps of them, and send Compact's one message in place of the conversation when Actions.Compact
+// MaxSteps of them (for a TextActions role, by holding the call to the draft's grammar), and send Compact's one message in place of the conversation when Actions.Compact
 // asks for it. Compacting is a turn stage, since it rewrites the working messages, which chakra's
 // guided finalizing call reads too; a request stage's messages reach only the step's own call.
 func (l *loop) stages(s *nl.Session, c *nl.Conversation, r *role) []agent.StepStage {
@@ -317,6 +325,9 @@ func (l *loop) stages(s *nl.Session, c *nl.Conversation, r *role) []agent.StepSt
 		l.mu.Unlock()
 		if out {
 			v.Tools = nil
+			if r.text {
+				v.Guided = r.guided(s.Grammar())
+			}
 		}
 		return v, nil
 	}}}
@@ -353,14 +364,9 @@ func (l *loop) tools(ts []nl.Tool, c *nl.Conversation, r *role) agent.ToolSource
 	act := func(ctx context.Context, action, arg string) string {
 		l.mu.Lock()
 		defer l.mu.Unlock()
-		result := c.Act(ctx, action, arg)
 		u := l.pending
 		l.recorded, l.pending = add(l.recorded, u), agent.Usage{}
-		now := time.Now()
-		l.tr.Steps = append(l.tr.Steps, nl.Step{Model: r.label, Action: action, Text: nl.ActionText(action, arg), Result: result, After: len(l.tr.Tries),
-			TokensIn: u.InputTokens, TokensOut: u.OutputTokens, TokensCached: u.CachedInputTokens, Latency: now.Sub(l.mark)})
-		l.mark = now
-		return result
+		return l.act(ctx, c, r, action, arg, u)
 	}
 	for _, t := range ts {
 		var err error
@@ -384,6 +390,37 @@ func (l *loop) tools(ts []nl.Tool, c *nl.Conversation, r *role) agent.ToolSource
 		}
 	}
 	return src
+}
+
+// textAction runs the action a TextActions role's reply asks for while it has steps left, and returns
+// what goes back to it. ok is false for any other reply, which is judged as an answer. The step is
+// charged what the turn spent since the last Try or Step.
+func (l *loop) textAction(ctx context.Context, s *nl.Session, c *nl.Conversation, r *role, info agent.TurnEndInfo) (string, bool) {
+	if !r.text || l.o.Actions == nil {
+		return "", false
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if c.Steps() >= s.MaxSteps() {
+		return "", false
+	}
+	action, arg, ok := nl.ReadAction(r.answer(info.Text))
+	if !ok {
+		return "", false
+	}
+	u := sub(info.Usage, l.recorded)
+	l.recorded, l.pending = info.Usage, agent.Usage{}
+	return l.act(ctx, c, r, action, arg, u), true
+}
+
+// act runs an action c's model asked for and records it as a Step costing u. l.mu is held.
+func (l *loop) act(ctx context.Context, c *nl.Conversation, r *role, action, arg string, u agent.Usage) string {
+	result := c.Act(ctx, action, arg)
+	now := time.Now()
+	l.tr.Steps = append(l.tr.Steps, nl.Step{Model: r.label, Action: action, Text: nl.ActionText(action, arg), Result: result, After: len(l.tr.Tries),
+		TokensIn: u.InputTokens, TokensOut: u.OutputTokens, TokensCached: u.CachedInputTokens, Latency: now.Sub(l.mark)})
+	l.mark = now
+	return result
 }
 
 // answered is what a vote's draws are asked: the turn's record up to the accepted answer, each tool
