@@ -131,11 +131,28 @@ func TestAProjectionOverARuleWhoseHeadDropsAVarNamesTheRule(t *testing.T) {
 	if ce.Kind != KindUnbound || ce.Rule != "mine" || ce.Var != "a" {
 		t.Errorf("got kind %q rule %q var %q\nwant kind %q rule \"mine\" var \"a\"", ce.Kind, ce.Rule, ce.Var, KindUnbound)
 	}
-	if ce.Fix != "write mine(?a) so the rule's head carries ?a out" {
+	if ce.Fix != "write the head as mine(?a) and add ?a to the goal's call, so the rule's head carries ?a out" {
 		t.Errorf("fix %q, want the head carried out of the rule", ce.Fix)
 	}
 	if pos, ok := Locate(text, ce); !ok || pos.Line != 1 || pos.Column != 16 {
 		t.Errorf("Locate = %+v %v, want the ?a the rule's body binds, line 1 column 16", pos, ok)
+	}
+}
+
+// A head with its own arguments keeps them in the fix: writing mine(?y) in place of mine(?x) would
+// drop ?x, so the fix spells mine(?x, ?y) and moves the goal's call to the new arity with it.
+func TestAHeadDropFixKeepsTheHeadsOwnArgs(t *testing.T) {
+	text := "mine(?x) :- node(?x), edge(?x, ?y);\nmine(?x) => ?y"
+	ce := checkErrorOf(t, text)
+	want := `query: rule "mine" binds ?y in its body but its head drops it, so the answer cannot project it`
+	if ce.Error() != want {
+		t.Errorf("message:\n got %s\nwant %s", ce.Error(), want)
+	}
+	if ce.Kind != KindUnbound || ce.Rule != "mine" || ce.Var != "y" {
+		t.Errorf("got kind %q rule %q var %q\nwant kind %q rule \"mine\" var \"y\"", ce.Kind, ce.Rule, ce.Var, KindUnbound)
+	}
+	if ce.Fix != "write the head as mine(?x, ?y) and add ?y to the goal's call, so the rule's head carries ?y out" {
+		t.Errorf("fix %q, want the head's own args kept", ce.Fix)
 	}
 }
 

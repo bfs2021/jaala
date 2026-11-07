@@ -1626,9 +1626,19 @@ func unboundProjectedErr(v Var, goal Body, rules []Rule) error {
 				continue
 			}
 			if bodyBindsPositiveVar(r.Body, v) && !headCarriesVar(r.Head, v) {
+				// The fix spells the head with its own arguments plus the variable, and moves the
+				// goal's call with it: replacing the head outright would drop the arguments it
+				// already carries, and a call left at the old arity fails to compile next.
+				fix := fmt.Sprintf("add ?%s to the rule's head and to the goal's call, so the rule's head carries ?%s out", v, v)
+				if args, ok := headArgsText(r.Head); ok {
+					with := args
+					if with != "" {
+						with += ", "
+					}
+					fix = fmt.Sprintf("write the head as %s(%s?%s) and add ?%s to the goal's call, so the rule's head carries ?%s out", shownName(r.Head.Relation), with, v, v, v)
+				}
 				return checkErr(KindUnbound, fmt.Sprintf("query: rule %q binds ?%s in its body but its head drops it, so the answer cannot project it", shownName(r.Head.Relation), v)).
-					inRule(r.Head.Relation).about(v).
-					fix(fmt.Sprintf("write %s(?%s) so the rule's head carries ?%s out", shownName(r.Head.Relation), v, v))
+					inRule(r.Head.Relation).about(v).fix(fix)
 			}
 		}
 	}
@@ -1677,6 +1687,31 @@ func headCarriesVar(head Atom, v Var) bool {
 		}
 	}
 	return false
+}
+
+// headArgsText spells a head's own arguments the way the surface syntax would: variables as ?name,
+// constants bare when numeric and quoted otherwise, aggregates as their call. It reports false for
+// a head it cannot spell (an arithmetic argument), so the fix falls back to wording that names no
+// argument.
+func headArgsText(head Atom) (string, bool) {
+	parts := make([]string, 0, len(head.Args))
+	for _, a := range head.Args {
+		switch {
+		case a.Var != "":
+			parts = append(parts, fmt.Sprintf("?%s", a.Var))
+		case a.Const != nil && a.Const.Num != nil:
+			parts = append(parts, a.Const.S)
+		case a.Const != nil:
+			parts = append(parts, strconv.Quote(a.Const.S))
+		case a.Agg != nil && a.Agg.Var != "":
+			parts = append(parts, fmt.Sprintf("%s(?%s)", a.Agg.Func, a.Agg.Var))
+		case a.Agg != nil:
+			parts = append(parts, a.Agg.Func+"()")
+		default:
+			return "", false
+		}
+	}
+	return strings.Join(parts, ", "), true
 }
 
 func validAggFunc(f string) bool {
