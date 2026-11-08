@@ -156,6 +156,33 @@ func TestAHeadDropFixKeepsTheHeadsOwnArgs(t *testing.T) {
 	}
 }
 
+// The fix spells the head through the package's printer, so it keeps what the surface syntax keeps:
+// an aggregate's distinct, a constant's unit (folded, as the engine holds it), and a string as
+// written rather than escaped.
+func TestAHeadDropFixUsesThePrinter(t *testing.T) {
+	text := `mine(?n, count(distinct ?x), 2km, "a\"b") :- node(?n), node(?x), weight(?n, ?w);` + "\n" +
+		`mine(?c, ?d, ?e, ?f) => ?w`
+	ce := checkErrorOf(t, text)
+	want := `query: rule "mine" binds ?w in its body but its head drops it, so the answer cannot project it`
+	if ce.Error() != want {
+		t.Errorf("message:\n got %s\nwant %s", ce.Error(), want)
+	}
+	wantFix := `write the head as mine(?n, count(distinct ?x), 2000m, "a\"b", ?w) and add ?w to the goal's call, so the rule's head carries ?w out`
+	if ce.Fix != wantFix {
+		t.Errorf("fix:\n got %s\nwant %s", ce.Fix, wantFix)
+	}
+}
+
+// A relation with two clauses needs the new argument in every head, and the fix says so.
+func TestAHeadDropFixNamesEveryClause(t *testing.T) {
+	text := "mine(?x) :- node(?x), edge(?x, ?y);\nmine(?x) :- node(?x), weight(?x, ?y);\nmine(?x) => ?y"
+	ce := checkErrorOf(t, text)
+	want := `write the head as mine(?x, ?y) and add ?y to the goal's call, so the rule's head carries ?y out; mine has 2 clauses, so add ?y to every head`
+	if ce.Fix != want {
+		t.Errorf("fix:\n got %s\nwant %s", ce.Fix, want)
+	}
+}
+
 func TestLocateFindsTheCallTheErrorIsAbout(t *testing.T) {
 	text := "# r reads ?b too\nr(?b) :- node(?b), net.pins(?b, ?c);\ns(?a, ?b) :- node(?a);\nr(?x), net.pins(?x) => ?x"
 	for _, c := range []struct {
